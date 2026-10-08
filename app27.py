@@ -6,7 +6,7 @@ Levels:
   1. System definition (alternatives, categories, custom indicators, units, indicator values)
   1.5 Correlation check (within-category Spearman correlation review, informational)
   2. Indicator processing (MEREC normalisation/weights, N2 normalisation, category scores)
-  3. Decision aggregation (Entropy/CRITIC weighting + RCW consolidation,
+  3. Decision aggregation (Entropy/CRITIC weighting + GPM consolidation,
                             TOPSIS/VIKOR/ELECTRE-Score/MULTIMOORA/WASPAS, PSI compromise ranking,
                             category-combination rank-stability scatter)
   4. Optional validation: weighting-method sensitivity, benefit/cost indicator
@@ -1063,53 +1063,11 @@ def critic_weights(mat):
     return C / total
 
 
-def rcw_icc(weight_sets):
-    """
-    ICC(A,1) absolute agreement (Eq. 1).
-
-    Targets = categories (n), raters = weighting methods (k).
-        ICC(A,1) = (MS_R - MS_E) / (MS_R + (k-1) MS_E + (k/n) (MS_C - MS_E))
-
-    MS_R = between-categories (rows), MS_C = between-methods (columns),
-    MS_E = residual mean square.
-    Returns None when undefined (fewer than 2 methods or categories, or
-    zero denominator).
-    """
-    W = np.asarray(weight_sets, dtype=float)
-    k, n = W.shape                      # k methods (raters), n categories (targets)
-    if k < 2 or n < 2:
-        return None
-    grand = W.mean()
-    ss_r = k * np.sum((W.mean(axis=0) - grand) ** 2)   # rows = categories
-    ss_c = n * np.sum((W.mean(axis=1) - grand) ** 2)   # columns = methods
-    ss_t = np.sum((W - grand) ** 2)
-    ss_e = max(ss_t - ss_r - ss_c, 0.0)
-    ms_r = ss_r / (n - 1)
-    ms_c = ss_c / (k - 1)
-    ms_e = ss_e / ((n - 1) * (k - 1))
-    denom = ms_r + (k - 1) * ms_e + (k / n) * (ms_c - ms_e)
-    if abs(denom) <= 1e-15:
-        return None
-    return float((ms_r - ms_e) / denom)
-
-
-def rcw_power_parameter(icc):
-    """
-    Power parameter taken directly from the ICC (Eq. 2):  p = ICC(A,1).
-
-    ICC = 1 -> arithmetic mean, ICC = 0 -> geometric mean, ICC < 0 -> towards
-    harmonic mean / minimum. An undefined ICC (None) falls back to p = 0.
-    """
-    if icc is None:
-        return 0.0
-    return float(icc)
-
-
 def power_mean_weights(weight_sets, p):
     """
-    Generalised power mean per category (Eq. 3):
+    Generalised power mean per category:
         P_j(p) = ( (1/m) * sum_r w_rj^p )^(1/p);  geometric mean when p = 0.
-    Computed in log-space for numerical stability.
+    Computed in log-space for numerical stability; p <= -1e6 -> min, p >= 1e6 -> max.
     """
     W = np.maximum(np.asarray(weight_sets, dtype=float), 1e-9)
     m = W.shape[0]
@@ -1123,52 +1081,34 @@ def power_mean_weights(weight_sets, p):
     return np.exp((logsumexp(p * logW, axis=0) - np.log(m)) / p)
 
 
-def rcw_mean_name(p):
-    """Human-readable name of the power mean for a given p."""
-    if abs(p + 1) < 0.05:
-        return "Harmonic mean"
-    if abs(p) < 0.05:
-        return "Geometric mean"
-    if abs(p - 1) < 0.05:
-        return "Arithmetic mean"
-    if p > 1:
-        return "Power mean (above arithmetic)"
-    if p > 0:
-        return "Power mean (between geometric and arithmetic)"
-    if p > -1:
-        return "Power mean (between harmonic and geometric)"
-    return "Power mean (below harmonic)"
+GPM_CASES = [
+    (-1e6, "p = −∞ (Min)"),
+    (-1.0, "p = −1 (Harmonic)"),
+    (0.0,  "p = 0 (Geometric)"),
+    (1.0,  "p = 1 (Arithmetic)"),
+    (1e6,  "p = +∞ (Max)"),
+]
+GPM_DEFAULT_LABEL = "p = 1 (Arithmetic)"
 
 
-def rcw_consolidate_info(weight_sets):
-    """
-    Reciprocal Composite Weighting (RCW) with ICC-driven power mean.
-
-      Eq. 1  ICC(A,1) = (MS_R - MS_E) / (MS_R + (k-1) MS_E + (k/n)(MS_C - MS_E))
-      Eq. 2  p        = ICC(A,1)
-      Eq. 3  P_j(p)   = ((1/m) * sum_r w_rj^p)^(1/p)    (p = 0 -> geometric mean)
-      Eq. 4  RCW_j    = P_j(p) / sum_l P_l(p)
-
-    Low agreement between methods -> p near/below 0 (conservative);
-    high agreement -> p near 1 (arithmetic mean).
-
-    Returns dict: weights, icc, p, mean_name.
-    """
-    sets = [np.asarray(ws, dtype=float) for ws in weight_sets]
-    if len(sets) == 1:
-        return {"weights": sets[0], "icc": None, "p": None,
-                "mean_name": "Single method"}
-    icc = rcw_icc(sets)
-    p = rcw_power_parameter(icc)
-    P = power_mean_weights(sets, p)
-    total = P.sum()
-    w = P / total if total > 1e-12 else np.full(len(P), 1.0 / len(P))
-    return {"weights": w, "icc": icc, "p": p, "mean_name": rcw_mean_name(p)}
+def selected_weight_sets(mat, weight_methods):
+    """Weight vectors (Entropy, CRITIC) for the selected weighting methods."""
+    sets = []
+    if "entropy" in weight_methods: sets.append(entropy_weights(mat))
+    if "critic"  in weight_methods: sets.append(critic_weights(mat))
+    return sets
 
 
-def rcw_consolidate(weight_sets):
-    """RCW consolidated weights (see rcw_consolidate_info for the equations)."""
-    return rcw_consolidate_info(weight_sets)["weights"]
+def gpm_consolidate(weight_sets, p):
+    """Generalised Power Mean Consolidation with exponent p, normalised to sum to 1."""
+    P = power_mean_weights(weight_sets, p)
+    tot = P.sum()
+    return P / tot if tot > 1e-12 else np.full(len(P), 1.0 / len(P))
+
+
+def gpm_case_weights(weight_sets):
+    """GPM at the standard cases p = -inf, -1, 0, 1, +inf: list of (label, weights)."""
+    return [(label, gpm_consolidate(weight_sets, p)) for p, label in GPM_CASES]
 
 
 def _harmonic_mean_weights(weight_sets):
@@ -1370,7 +1310,7 @@ ALL_MCDM_KEYS = ["topsis", "vikor", "electre", "multimoora", "waspas"]
 WEIGHT_COMBO_SETS = [
     (("entropy",), "Entropy"),
     (("critic",), "CRITIC"),
-    (("entropy", "critic"), "RCW(En+Cr)"),
+    (("entropy", "critic"), "GPM(En+Cr)"),
 ]
 
 
@@ -1389,8 +1329,9 @@ def calc_psi(method_ranks, methods, p):
 
 def get_category_weights(mat, weight_methods):
     """
-    Compute category weights using RCW (ICC(A,1)-driven power mean consolidation)
-    across selected objective weighting methods.
+    Compute category weights using Generalised Power Mean Consolidation across the
+    selected objective weighting methods, using the case chosen in Step 10
+    (session key gpm_forward_p; default p = 1, arithmetic).
     """
     k = mat.shape[0]
     sets = []
@@ -1398,7 +1339,8 @@ def get_category_weights(mat, weight_methods):
     if "critic"  in weight_methods: sets.append(critic_weights(mat))
     if not sets:
         return np.full(k, 1.0 / k)
-    return rcw_consolidate(sets) if len(sets) > 1 else sets[0]
+    p = float(st.session_state.get("gpm_forward_p", 1.0))
+    return gpm_consolidate(sets, p) if len(sets) > 1 else sets[0]
 
 
 def run_mcdm_suite(weighted_mat, weights, methods):
@@ -1921,9 +1863,9 @@ METHOD_DESCRIPTIONS = [
         "Role in PRISM": "Objective weighting that accounts for both contrast and inter-category correlation.",
     },
     {
-        "Method": "RCW",
+        "Method": "GPM",
         "Stage": "Inter-category weighting",
-        "Plain-language description": "Reciprocal Composite Weighting — consolidates multiple weighting methods with a power mean whose exponent p equals their ICC(A,1) absolute agreement (p = 1 arithmetic, p = 0 geometric, p < 0 more conservative).",
+        "Plain-language description": "Generalised Power Mean Consolidation — consolidates Entropy and CRITIC weights with a power mean. Because no single consolidation is proven best, five cases are reported (p = −∞ min, −1 harmonic, 0 geometric, 1 arithmetic, +∞ max). One case is carried forward to the later steps.",
         "Role in PRISM": "Inter-category weighting and consolidation before MCDM aggregation.",
     },
     {
@@ -2292,8 +2234,8 @@ def build_excel_report():
     # ── Sheet 5: Category Weights ─────────────────────────────────────────────
     if hasattr(ss, "final_cat_weights") and ss.final_cat_weights is not None:
         ws5 = wb.create_sheet("5. Category Weights")
-        add_title(ws5, "Category Weights (RCW Consolidation)")
-        headers = ["Category", "RCW Weight", "RCW Weight (%)"]
+        add_title(ws5, "Category Weights (GPM Consolidation)")
+        headers = ["Category", "GPM Weight", "GPM Weight (%)"]
         for ci, h in enumerate(headers, 1):
             ws5.cell(3, ci, h).font = HDR_FONT
             ws5.cell(3, ci).fill = HDR_FILL
@@ -2305,17 +2247,11 @@ def build_excel_report():
             ws5.cell(ri, 2, round(w, 4)).font = BODY_FONT
             ws5.cell(ri, 3, round(w * 100, 1)).font = BODY_FONT
             style_body(ws5, ri, 3)
-        _rcw = ss.get("rcw_info")
-        if _rcw and _rcw.get("p") is not None:
+        _lab = ss.get("gpm_forward_label")
+        if _lab:
             _r0 = 4 + len(l3_cats) + 1
-            _p = _rcw["p"]
-            _p_txt = "-inf" if np.isneginf(_p) else ("+inf" if np.isposinf(_p) else round(float(_p), 4))
-            _icc_txt = "undefined" if _rcw["icc"] is None else round(float(_rcw["icc"]), 4)
-            for _k, (_lab, _val) in enumerate([
-                ("ICC(A,1)", _icc_txt), ("Power parameter p", _p_txt), ("Mean", _rcw["mean_name"]),
-            ]):
-                ws5.cell(_r0 + _k, 1, _lab).font = BODY_FONT
-                ws5.cell(_r0 + _k, 2, _val).font = BODY_FONT
+            ws5.cell(_r0, 1, "Consolidation").font = BODY_FONT
+            ws5.cell(_r0, 2, _lab).font = BODY_FONT
         auto_width(ws5)
 
     # ── Sheet 6: MCDM Results ─────────────────────────────────────────────────
@@ -2676,7 +2612,7 @@ def landing_page():
         "<div class='prism-framework-arrow'>&#8594;</div>"
         "<div class='prism-framework-box'>"
         "<strong>Weight consolidation</strong>"
-        "<span class='sub'>Reciprocal composite weighting (RCW)</span></div>"
+        "<span class='sub'>Generalised power mean consolidation (GPM)</span></div>"
         "<div class='prism-framework-arrow'>&#8594;</div>"
         "<div class='prism-framework-box'>"
         "<strong>MCDM aggregation</strong>"
@@ -2712,7 +2648,7 @@ def landing_page():
     workflow = [
         ("1", "Define", "Alternatives, categories, indicators"),
         ("2", "Process", "MEREC, N2, category scores"),
-        ("3", "Aggregate", "RCW weights, MCDM, PSI ranking"),
+        ("3", "Aggregate", "GPM weights, MCDM, PSI ranking"),
         ("4", "Validate", "Sensitivity and uncertainty analysis"),
         ("5", "Report & decide", "Decision support and Excel export"),
     ]
@@ -2735,8 +2671,8 @@ def landing_page():
         "PRISM is an integrated multi-criteria decision-making framework "
         "for the comparative sustainability assessment of manufacturing "
         "alternatives. It combines intra-category weighting through MEREC, "
-        "inter-category weighting and consolidation via Reciprocal Composite "
-        "Weighting (RCW), and multi-method MCDM aggregation producing a final "
+        "inter-category weighting and consolidation via Generalised Power Mean "
+        "Consolidation (GPM), and multi-method MCDM aggregation producing a final "
         "compromise ranking through the Performance Stability Index (PSI)."
         "</p>"
         "<p class='prism-about-body'>"
@@ -3559,41 +3495,46 @@ def step10():
         if "critic" in st.session_state.sel_weight_methods:
             sets.append(critic_weights(mat)); labels.append("CRITIC")
 
-        rcw_info = rcw_consolidate_info(sets)
-        final_w = rcw_info["weights"]
-        st.session_state.final_cat_weights = final_w
-        st.session_state.rcw_info = {
-            "icc": rcw_info["icc"],
-            "p": rcw_info["p"], "mean_name": rcw_info["mean_name"],
-        }
-
-        rows = []
-        for i, ckey in enumerate(l3_cats):
-            row = [CATS[ckey]["label"]]
-            for s in sets:
-                row.append(round(s[i], 4))
-            row.append(round(final_w[i], 4))
-            rows.append(row)
-        cols = ["Category"] + labels + (["RCW"] if len(sets) > 1 else ["Final"])
-        st.dataframe(pd.DataFrame(rows, columns=cols), use_container_width=True, hide_index=True)
-
+        st.subheader("Generalised Power Mean Consolidation")
         if len(sets) > 1:
-            icc_raw = rcw_info["icc"]
-            p_val = rcw_info["p"]
-            m1, m2, m3 = st.columns(3)
-            m1.metric("ICC(A,1) agreement",
-                      "undefined" if icc_raw is None else f"{icc_raw:.3f}",
-                      help="Absolute agreement between the selected weighting methods across "
-                           "categories (raters = methods, targets = categories).")
-            m2.metric("Power parameter p", f"{p_val:.3f}",
-                      help="p = ICC(A,1). p = 1 arithmetic mean, p = 0 geometric mean, "
-                           "p = -1 harmonic mean.")
-            m3.metric("Resulting mean", rcw_info["mean_name"])
-            if icc_raw is None:
-                st.caption("ICC(A,1) is undefined (no variation between categories or methods), "
-                           "so p = 0 (geometric mean) is used.")
+            st.caption(
+                "P_j(p) = ((1/m) · Σ_r w_rj^p)^(1/p), normalised so the weights sum to 1. "
+                "No single consolidation is proven best, so the standard cases "
+                "p = −∞ (min), −1 (harmonic), 0 (geometric), 1 (arithmetic) and +∞ (max) are all "
+                "tabulated and compared in Step 12."
+            )
+            case_list = gpm_case_weights(sets)
+            case_labels = [lab for lab, _ in case_list]
+            prev = st.session_state.get("gpm_forward_label")
+            idx0 = case_labels.index(prev) if prev in case_labels else case_labels.index(GPM_DEFAULT_LABEL)
+            rows = []
+            for i, ckey in enumerate(l3_cats):
+                row = [CATS[ckey]["label"]]
+                row += [round(float(s_[i]), 4) for s_ in sets]
+                row += [round(float(w_case[i]), 4) for _, w_case in case_list]
+                rows.append(row)
+            st.dataframe(pd.DataFrame(rows, columns=["Category"] + labels + case_labels),
+                         use_container_width=True, hide_index=True)
+            choice = st.selectbox(
+                "Consolidation carried forward to Step 12 and the validation checks",
+                case_labels, index=idx0, key="gpm_forward_select",
+                help="Step 12 compares all five cases. The case chosen here supplies the "
+                     "single weight vector used by the main results table and the validation checks.")
+            sel_i = case_labels.index(choice)
+            final_w = case_list[sel_i][1]
+            st.session_state.gpm_forward_label = choice
+            st.session_state.gpm_forward_p = GPM_CASES[sel_i][0]
         else:
+            final_w = sets[0]
+            st.session_state.gpm_forward_label = "Single method"
+            st.session_state.gpm_forward_p = 1.0
+            rows = []
+            for i, ckey in enumerate(l3_cats):
+                rows.append([CATS[ckey]["label"], round(float(sets[0][i]), 4), round(float(final_w[i]), 4)])
+            st.dataframe(pd.DataFrame(rows, columns=["Category"] + labels + ["Final"]),
+                         use_container_width=True, hide_index=True)
             st.caption("Only one weighting method selected - no consolidation applied.")
+        st.session_state.final_cat_weights = final_w
 
     st.divider()
     c1, c2 = st.columns(2)
@@ -3733,7 +3674,7 @@ def step12():
 
     if multi:
         st.divider()
-        st.subheader("PSI curve")
+        st.subheader("PSI dot plot across power-mean consolidations")
         st.markdown(
             "<p style='font-family:Times New Roman,serif;font-size:13px;"
             "color:#0D2B5E;margin:4px 0;text-align:center;'>"
@@ -3754,34 +3695,107 @@ def step12():
         psi_vals = calc_psi(method_ranks, methods, p_val)
         psi_ranks = rank_with_ties(psi_vals, ascending=False)
 
+        st.caption(f"PSI at the carried-forward weights ({st.session_state.get('gpm_forward_label', '')}) used in the table above.")
         bar_cols = st.columns(len(names))
         for i, name in enumerate(names):
             with bar_cols[i]:
                 st.metric(name, f"{psi_vals[i]:.4f}", f"rank {psi_ranks[i]}")
 
-        p_range = np.linspace(0.01, 0.99, 99)
-        apply_mpl_style()
-        fig, ax = plt.subplots(figsize=(7, 3.8))
-        for i, name in enumerate(names):
-            series = [calc_psi(method_ranks, methods, p)[i] for p in p_range]
-            ax.plot(p_range, series, label=name, linewidth=2,
-                    color=PROC_COLORS[i % len(PROC_COLORS)])
-        ax.axvline(x=p_val, color="gray", linestyle="--", linewidth=1)
-        ax.set_xlabel("p", fontsize=10)
-        ax.set_ylabel("PSI", fontsize=10)
-        ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.12),
-                  ncol=len(names), fontsize=9, frameon=False)
-        ax.tick_params(labelsize=9)
-        plt.tight_layout()
-        mpl_show(fig)
+
+        mat_cat = np.array([cat_scores[c] for c in l3_cats])
+        gsets = selected_weight_sets(mat_cat, st.session_state.sel_weight_methods)
+        if len(gsets) < 2:
+            st.info("Select both Entropy and CRITIC in Step 10 to compare power-mean "
+                    "consolidation cases.")
+        else:
+            case_list = gpm_case_weights(gsets)
+            case_psi, case_rank, case_mr = [], [], []
+            for hdr, w_case in case_list:
+                wm = np.array([cat_scores[c] * w_case[i] for i, c in enumerate(l3_cats)])
+                mr = run_mcdm_suite(wm, w_case, methods)
+                psi_c = calc_psi(mr, methods, p_val)
+                case_mr.append(mr)
+                case_psi.append(np.asarray(psi_c, dtype=float))
+                case_rank.append(rank_with_ties(psi_c, ascending=False))
+
+            apply_mpl_style()
+            n_case = len(case_list)
+            fig, ax = plt.subplots(figsize=(8, 0.62 * n_case + 1.8))
+            ys = list(range(n_case))[::-1]
+            for ci, (hdr, _) in enumerate(case_list):
+                y = ys[ci]
+                vals = case_psi[ci]
+                ax.hlines(y, vals.min(), vals.max(), color="#D1D5DB", linewidth=1.5, zorder=1)
+                for i, name in enumerate(names):
+                    ax.scatter(vals[i], y, s=210, color=PROC_COLORS[i % len(PROC_COLORS)],
+                               edgecolor="white", linewidth=0.8, zorder=3,
+                               label=name if ci == 0 else None)
+                    ax.text(vals[i], y, str(int(case_rank[ci][i])), ha="center", va="center",
+                            fontsize=7, color="white", fontweight="bold", zorder=4)
+            ax.set_yticks(ys)
+            ax.set_yticklabels([h for h, _ in case_list], fontsize=9)
+            fwd_label = st.session_state.get("gpm_forward_label")
+            for tl in ax.get_yticklabels():
+                if tl.get_text() == fwd_label:
+                    tl.set_fontweight("bold")
+            ax.set_ylim(-0.7, n_case - 0.3)
+            ax.set_xlabel(f"PSI score at p = {p_val:.2f}  (number in dot = PSI rank)", fontsize=10)
+            ax.grid(axis="x", alpha=0.3)
+            ax.tick_params(labelsize=9)
+            ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=len(names),
+                      fontsize=9, frameon=False)
+            plt.tight_layout()
+            mpl_show(fig)
+            st.caption("Bold row = consolidation carried forward from Step 10 (used in the table above).")
+
+            hdrs = [h for h, _ in case_list]
+            rank_df = pd.DataFrame(
+                {"Alternative": names, **{h: [int(r) for r in case_rank[ci]]
+                                         for ci, h in enumerate(hdrs)}})
+            st.markdown("**PSI rank under each consolidation case**")
+            st.dataframe(rank_df, use_container_width=True, hide_index=True)
+            with st.expander("PSI scores and MCDM ranks under each case"):
+                psi_df = pd.DataFrame(
+                    {"Alternative": names, **{h: [round(float(v), 4) for v in case_psi[ci]]
+                                             for ci, h in enumerate(hdrs)}})
+                st.markdown("PSI scores")
+                st.dataframe(psi_df, use_container_width=True, hide_index=True)
+                mr_rows = []
+                for ci, h in enumerate(hdrs):
+                    for m in methods:
+                        row = {"Case": h, "Method": METHOD_LABELS[m]}
+                        for pi, name in enumerate(names):
+                            row[name] = int(case_mr[ci][m][pi])
+                        mr_rows.append(row)
+                st.markdown("MCDM ranks")
+                st.dataframe(pd.DataFrame(mr_rows), use_container_width=True, hide_index=True)
 
         st.divider()
         st.subheader("Ranking across category combinations")
         n_combo = 2 ** len(l3_cats) - 1
 
-        combo_p = st.slider("p for combination view", min_value=0.0, max_value=1.0,
-                             value=0.5, step=0.01, key="combo_p_slider",
-                             help=FIELD_HELP["combo_p"])
+        _cs_mat = np.array([cat_scores[c] for c in l3_cats])
+        _multi_w = len(selected_weight_sets(_cs_mat, st.session_state.sel_weight_methods)) > 1
+        combo_power = None
+        ccol1, ccol2 = st.columns(2)
+        with ccol1:
+            combo_p = st.slider("p for combination view", min_value=0.0, max_value=1.0,
+                                 value=0.5, step=0.01, key="combo_p_slider",
+                                 help=FIELD_HELP["combo_p"])
+        with ccol2:
+            if _multi_w:
+                _case_labels = [lab for _, lab in GPM_CASES]
+                _fwd = st.session_state.get("gpm_forward_label")
+                _idx = _case_labels.index(_fwd) if _fwd in _case_labels else _case_labels.index(GPM_DEFAULT_LABEL)
+                _choice = st.selectbox(
+                    "Power mean for weight consolidation", _case_labels, index=_idx,
+                    key="combo_gpm_select",
+                    help="Entropy and CRITIC weights are re-derived inside every category "
+                         "combination and consolidated with this power mean before the MCDM "
+                         "methods and PSI are applied.")
+                combo_power = {lab: pp for pp, lab in GPM_CASES}[_choice]
+        if combo_power is not None:
+            st.caption(f"Weights inside each combination: Entropy + CRITIC consolidated with {_choice}.")
 
         combos = get_combinations(l3_cats)
         cat_initial = {c: CAT_SHORT.get(c, CATS[c]["label"][:1]) for c in l3_cats}
@@ -3793,7 +3807,12 @@ def step12():
                 rank_grid[:, ci] = rank_with_ties(cat_scores[combo[0]], ascending=False)
             else:
                 sub_mat = np.array([cat_scores[c] for c in combo])
-                sub_w = get_category_weights(sub_mat, st.session_state.sel_weight_methods)
+                if combo_power is None:
+                    sub_w = get_category_weights(sub_mat, st.session_state.sel_weight_methods)
+                else:
+                    sub_w = gpm_consolidate(
+                        selected_weight_sets(sub_mat, st.session_state.sel_weight_methods),
+                        combo_power)
                 sub_weighted = sub_mat * sub_w[:, None]
                 sub_ranks = run_mcdm_suite(sub_weighted, sub_w, methods)
                 psi_combo = calc_psi(sub_ranks, methods, combo_p)
@@ -4065,28 +4084,28 @@ def validation_rank_reversal():
             '⚠️ Rank-reversal detected: one or more alternatives changed position after exclusion.'
             '</div>', unsafe_allow_html=True)
 
-        st.markdown("**Why did this happen? — RCW weight changes upon exclusion**")
+        st.markdown("**Why did this happen? — GPM weight changes upon exclusion**")
         st.markdown(
             "<p style='font-family:Times New Roman,Tinos,serif;font-size:12px;color:#555;'>"
-            "PRISM computes MEREC and RCW weights from the performance data of "
+            "PRISM computes MEREC and GPM weights from the performance data of "
             "<b>all alternatives simultaneously</b>. When an alternative is removed, "
             "the normalised indicator values change → MEREC weights change → "
             "category scores change → Entropy and CRITIC weights change → "
-            "RCW consolidated weights change → rankings change. "
+            "GPM consolidated weights change → rankings change. "
             "This is an inherent property of data-driven objective weighting — "
             "not a framework deficiency.</p>",
             unsafe_allow_html=True,
         )
 
-        # Show RCW weight change table
+        # Show GPM weight change table
         w_full = st.session_state.final_cat_weights
         l3_cats_rr = ordered_l3_cats()
         rows_w = []
         for ci, ckey in enumerate(l3_cats_rr):
             rows_w.append({
                 "Category": CATS[ckey]["label"],
-                "RCW weight (all alternatives)": round(float(w_full[ci]), 4),
-                "RCW weight (after exclusion)":  round(float(w_cat_pert[ci]), 4),
+                "GPM weight (all alternatives)": round(float(w_full[ci]), 4),
+                "GPM weight (after exclusion)":  round(float(w_cat_pert[ci]), 4),
                 "Δ Change": f"{float(w_cat_pert[ci]-w_full[ci]):+.4f}",
             })
         st.dataframe(pd.DataFrame(rows_w), use_container_width=True, hide_index=True)
@@ -4232,7 +4251,7 @@ def validation_normalisation_sensitivity():
 
 
 def validation_bootstrap_merec_rcw():
-    st.subheader("6. Bootstrap stability analysis — MEREC and RCW")
+    st.subheader("6. Bootstrap stability analysis — MEREC and GPM")
 
     names    = st.session_state.proc_names
     l3_cats  = ordered_l3_cats()
@@ -4269,7 +4288,7 @@ def validation_bootstrap_merec_rcw():
     # Storage
     # MEREC: per category → list of weight arrays (n_iter, n_ind)
     merec_boot = {ckey: [] for ckey in l3_cats}
-    # RCW: list of weight arrays (n_iter, n_cats)
+    # GPM: list of weight arrays (n_iter, n_cats)
     rcw_boot = []
 
     for b in range(n_iter):
@@ -4301,7 +4320,7 @@ def validation_bootstrap_merec_rcw():
 
             cat_scores_b[ckey] = (n2_b * w_ind_b[:, None]).sum(axis=0)
 
-        # ── Recompute RCW ─────────────────────────────────────────────────────
+        # ── Recompute GPM ─────────────────────────────────────────────────────
         mat_b = np.array([cat_scores_b[c] for c in l3_cats])
         w_rcw_b = get_category_weights(mat_b, sel_wm)
         rcw_boot.append(w_rcw_b.copy())
@@ -4410,8 +4429,8 @@ def validation_bootstrap_merec_rcw():
                 unsafe_allow_html=True,
             )
 
-    # ── RCW results ───────────────────────────────────────────────────────────
-    st.markdown("### RCW Weight Stability")
+    # ── GPM results ───────────────────────────────────────────────────────────
+    st.markdown("### GPM Weight Stability")
 
     rcw_arr = np.array(rcw_boot)  # (n_iter, n_cats)
     cat_labels = [CATS[c]["label"] for c in l3_cats]
@@ -4429,7 +4448,7 @@ def validation_bootstrap_merec_rcw():
             all_stable_rcw = False
         rows_r.append({
             "Category": CATS[ckey]["label"],
-            "Observed RCW weight": round(obs, 4),
+            "Observed GPM weight": round(obs, 4),
             "Bootstrap mean": round(mean, 4),
             "95% CI lower": round(lo, 4),
             "95% CI upper": round(hi, 4),
@@ -4440,7 +4459,7 @@ def validation_bootstrap_merec_rcw():
     st.dataframe(pd.DataFrame(rows_r), use_container_width=True,
                  hide_index=True)
 
-    # RCW CI chart
+    # GPM CI chart
     apply_mpl_style()
     n_cats = len(l3_cats)
     obs_r  = [float(final_w[ci]) for ci in range(n_cats)]
@@ -4461,7 +4480,7 @@ def validation_bootstrap_merec_rcw():
     ax.set_xticks(x)
     ax.set_xticklabels([CATS[c]["label"][:6] for c in l3_cats],
                        rotation=20, ha="right", fontsize=9)
-    ax.set_ylabel("RCW weight", fontsize=10)
+    ax.set_ylabel("GPM weight", fontsize=10)
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0],[0], marker="D", color="grey", markersize=7,
@@ -4492,7 +4511,7 @@ def validation_bootstrap_merec_rcw():
             f'<div style="background:#E8F5E9;border-left:3px solid #16A34A;'
             f'padding:8px 12px;border-radius:4px;margin:4px 0;'
             f'font-family:Times New Roman,Tinos,serif;font-size:13px;color:#1B5E20;">'
-            f'✅ All RCW weights are stable within ±{unc_pct}% indicator uncertainty. '
+            f'✅ All GPM weights are stable within ±{unc_pct}% indicator uncertainty. '
             f'The observed weight ordering ({" > ".join(obs_order)}) is preserved in '
             f'{pct_stable:.1f}% of bootstrap iterations.</div>',
             unsafe_allow_html=True,
@@ -4502,7 +4521,7 @@ def validation_bootstrap_merec_rcw():
             f'<div style="background:#FFF8E1;border-left:3px solid #D97706;'
             f'padding:8px 12px;border-radius:4px;margin:4px 0;'
             f'font-family:Times New Roman,Tinos,serif;font-size:13px;color:#7B5800;">'
-            f'⚠️ Some RCW weights fall outside the 95% CI. '
+            f'⚠️ Some GPM weights fall outside the 95% CI. '
             f'The observed weight ordering is preserved in '
             f'{pct_stable:.1f}% of bootstrap iterations.</div>',
             unsafe_allow_html=True,
@@ -4567,7 +4586,7 @@ def validation_indicator_uncertainty():
     Validation Check 7 — Indicator-level uncertainty propagation.
 
     Propagates ±% uncertainty in raw indicator values through the full
-    PRISM pipeline (MEREC → N2 → CategoryScores → RCW → MCDM → PSI)
+    PRISM pipeline (MEREC → N2 → CategoryScores → GPM → MCDM → PSI)
     using Monte Carlo sampling.
 
     Addresses Limitation L3: uncertainty in raw indicator values is not
@@ -4846,11 +4865,11 @@ def _p_to_x(p):
 
 def compute_power_spectrum(mat, methods, psi_p=0.5, p_grid=None):
     """
-    Re-run the ranking with RCW weights built from Entropy + CRITIC using a power
+    Re-run the ranking with GPM weights built from Entropy + CRITIC using a power
     mean with exponent p, for p across the whole spectrum (-inf ... +inf).
 
     Returns dict with p_grid, labels, weights (n_p x k), ranks (n_alt x n_p)
-    and the data-driven p (ICC(A,1)) with its weights/ranks.
+    and p_fwd, the exponent of the consolidation carried forward from Step 10.
     """
     p_grid = list(POWER_P_GRID if p_grid is None else p_grid)
     sets = [entropy_weights(mat), critic_weights(mat)]
@@ -4874,15 +4893,11 @@ def compute_power_spectrum(mat, methods, psi_p=0.5, p_grid=None):
         r, pm = _rank_for(w)
         weights.append(w); rank_cols.append(r); per_method.append(pm)
 
-    info = rcw_consolidate_info(sets)
-    p_icc = 0.0 if info["p"] is None else float(info["p"])
-    w_icc = info["weights"]
-    r_icc, _ = _rank_for(w_icc)
+    p_fwd = float(st.session_state.get("gpm_forward_p", 1.0))
     return {
         "p_grid": p_grid, "labels": [_p_label(p) for p in p_grid],
         "weights": np.array(weights), "ranks": np.array(rank_cols).T,
-        "per_method": per_method,
-        "p_icc": p_icc, "icc": info["icc"], "w_icc": w_icc, "r_icc": r_icc,
+        "per_method": per_method, "p_fwd": p_fwd,
     }
 
 
@@ -4893,7 +4908,7 @@ def _assess_power_spectrum(winner_idx, l3_cats, cat_scores, methods):
                 "status_label": TRAFFIC_LABELS["na"]}
     mat = np.array([cat_scores[c] for c in l3_cats])
     res = compute_power_spectrum(mat, methods)
-    wr = [int(r) for r in res["ranks"][winner_idx]] + [int(res["r_icc"][winner_idx])]
+    wr = [int(r) for r in res["ranks"][winner_idx]]
     key_idx = [i for i, p in enumerate(res["p_grid"]) if float(p) in POWER_P_KEY]
     key_ranks = [int(res["ranks"][winner_idx][i]) for i in key_idx]
     if all(r == 1 for r in wr):
@@ -5128,7 +5143,7 @@ def _assess_bootstrap(winner_idx, l3_cats, methods, sel_wm, n_iter=500, unc_pct=
     status = _status_from_rank1_pct(pct)
     detail = f"Winner holds Rank 1 in {pct:.1f}% of {n_iter} bootstrap iterations (±{unc_pct}% noise)"
     return {
-        "id": "bootstrap", "name": "Bootstrap stability (MEREC and RCW)",
+        "id": "bootstrap", "name": "Bootstrap stability (MEREC and GPM)",
         "status": status, "detail": detail, "status_label": TRAFFIC_LABELS[status],
         "metric_pct": pct,
     }
@@ -5210,7 +5225,7 @@ def _overall_dashboard_status(checks):
 def _dashboard_iter_settings():
     """Iteration counts used by the Step 13 sensitivity dashboard."""
     return {
-        "v": 2,
+        "v": 3,
         "bs_n_iter": int(st.session_state.get("dash_bs_n_iter", st.session_state.get("bs_n_iter", 500))),
         "bs_unc_pct": int(st.session_state.get("dash_bs_unc_pct", st.session_state.get("bs_unc_pct", 10))),
         "ind_n_iter": int(st.session_state.get("dash_ind_unc_iter", st.session_state.get("ind_unc_iter", 500))),
@@ -5375,7 +5390,7 @@ def validation_intro():
         validation_rank_reversal()
     with st.expander("5. Normalisation sensitivity"):
         validation_normalisation_sensitivity()
-    with st.expander("6. Bootstrap stability (MEREC and RCW)"):
+    with st.expander("6. Bootstrap stability (MEREC and GPM)"):
         validation_bootstrap_merec_rcw()
     with st.expander("7. Indicator-level uncertainty propagation"):
         validation_indicator_uncertainty()
@@ -5540,10 +5555,10 @@ def validation_weight_sensitivity():
 def validation_power_spectrum():
     st.subheader("8. Power-mean spectrum sensitivity")
     st.caption(
-        "RCW combines Entropy and CRITIC with a power mean of exponent p. Here p is swept "
+        "GPM combines Entropy and CRITIC with a power mean of exponent p. Here p is swept "
         "from -inf (minimum) through -1 (harmonic), 0 (geometric) and +1 (arithmetic) to +inf "
         "(maximum), and the full MCDM + PSI ranking is recomputed at every p. "
-        "The dashed line marks the data-driven p = ICC(A,1) used by RCW."
+        "The dashed line marks the consolidation carried forward from Step 10."
     )
     names = st.session_state.proc_names
     l3_cats = ordered_l3_cats()
@@ -5565,7 +5580,6 @@ def validation_power_spectrum():
         row = {"Alternative": name}
         for j, lab in enumerate(labels):
             row[lab] = int(res["ranks"][pi, j])
-        row[f"RCW (p={res['p_icc']:.2f})"] = int(res["r_icc"][pi])
         rank_rows.append(row)
     df_rank = pd.DataFrame(rank_rows)
     st.markdown("**Compromise rank across the power-mean spectrum**")
@@ -5573,7 +5587,7 @@ def validation_power_spectrum():
     st.session_state["export_power_spectrum"] = df_rank
 
     changed = [names[i] for i in range(len(names))
-               if len(set(res["ranks"][i].tolist() + [int(res["r_icc"][i])])) > 1]
+               if len(set(res["ranks"][i].tolist())) > 1]
     key_idx = [i for i, p in enumerate(res["p_grid"]) if float(p) in POWER_P_KEY]
     key_changed = [names[i] for i in range(len(names))
                    if len(set(int(res["ranks"][i][j]) for j in key_idx)) > 1]
@@ -5605,9 +5619,9 @@ def validation_power_spectrum():
     def _decorate(fig, ytitle):
         for kp in POWER_P_KEY:
             fig.add_vline(x=_p_to_x(kp), line_width=1, line_color="#9CA3AF", opacity=0.6)
-        fig.add_vline(x=_p_to_x(res["p_icc"]), line_width=2, line_dash="dash",
+        fig.add_vline(x=_p_to_x(res["p_fwd"]), line_width=2, line_dash="dash",
                       line_color="#0D2B5E",
-                      annotation_text=f"RCW p={res['p_icc']:.2f}", annotation_position="top")
+                      annotation_text="carried forward", annotation_position="top")
         fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext,
                          title="Power parameter p  (-inf = min, -1 harmonic, 0 geometric, 1 arithmetic, +inf = max)",
                          range=[-1.05, 1.05])
@@ -5651,10 +5665,6 @@ def validation_power_spectrum():
         for j, cl in enumerate(cat_labels):
             row[cl] = round(float(res["weights"][i, j]), 4)
         w_rows.append(row)
-    row = {"p": f"RCW data-driven ({res['p_icc']:.2f})"}
-    for j, cl in enumerate(cat_labels):
-        row[cl] = round(float(res["w_icc"][j]), 4)
-    w_rows.append(row)
     with st.expander("Weights table"):
         st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
 
@@ -5915,7 +5925,7 @@ def analytics_category_weighted_contribution():
     Category contribution to weighted MCDM input analysis.
 
     Formulae (from PRISM methodology):
-      S_c,i  = CategoryScore_c,i × w_c^RCW
+      S_c,i  = CategoryScore_c,i × w_c^GPM
       T_i    = Σ_c S_c,i
       Pct^PSI_c,i = (S_c,i / T_i) × 100
       PSI_c,i = PSI_i × (S_c,i / T_i)
@@ -5937,7 +5947,7 @@ def analytics_category_weighted_contribution():
                        value=0.5, step=0.01, key="cat_contrib_p",
                        help=FIELD_HELP["psi_p"])
 
-    # ── Step 1: S_c,i = CategoryScore × w_c^RCW ─────────────────────────────
+    # ── Step 1: S_c,i = CategoryScore × w_c^GPM ─────────────────────────────
     S = np.array([cat_scores[c] * final_w[ci]
                   for ci, c in enumerate(l3_cats)])  # (n_cats, n_proc)
 
@@ -5961,7 +5971,7 @@ def analytics_category_weighted_contribution():
         "color:#0D2B5E;margin:4px 0;'>"
         "<b>Pct<sub>c,i</sub></b> = "
         "(<i>S<sub>c,i</sub></i> / <i>T<sub>i</sub></i>) × 100 &nbsp;|&nbsp; "
-        "<i>S<sub>c,i</sub></i> = CategoryScore<sub>c,i</sub> × <i>w<sub>c</sub><sup>RCW</sup></i>"
+        "<i>S<sub>c,i</sub></i> = CategoryScore<sub>c,i</sub> × <i>w<sub>c</sub><sup>GPM</sup></i>"
         "</p>",
         unsafe_allow_html=True,
     )
@@ -5998,10 +6008,10 @@ def analytics_category_weighted_contribution():
 
 
 
-    # ── RCW weights reference ─────────────────────────────────────────────────
-    with st.expander("RCW category weights"):
+    # ── GPM weights reference ─────────────────────────────────────────────────
+    with st.expander("GPM category weights"):
         w_rows = [{"Category": CATS[l3_cats[ci]]["label"],
-                   "RCW weight": round(float(final_w[ci]), 4),
+                   "GPM weight": round(float(final_w[ci]), 4),
                    "Weight (%)": round(float(final_w[ci]) * 100, 1)}
                   for ci in range(len(l3_cats))]
         st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
@@ -6013,7 +6023,7 @@ def analytics_combined_contribution():
 
     Inner ring: categories sized by Pct_c,i = S_c,i / T_i × 100
                 % label shown inside each slice
-    Outer ring: indicators sized by Pct^PSI_j,i = n2×w^MEREC×w^RCW / T × 100
+    Outer ring: indicators sized by Pct^PSI_j,i = n2×w^MEREC×w^GPM / T × 100
                 leader lines to labels outside the ring for ALL indicators
     Centre:     short process name + PSI score
     """
@@ -6411,7 +6421,7 @@ def analytics_indicator_contribution():
     """
     Indicator contribution — nested donut (sunburst) chart per process.
 
-    Outer ring: indicators sized by Pct^PSI_j,i = n2 × w^MEREC × w^RCW / T × 100
+    Outer ring: indicators sized by Pct^PSI_j,i = n2 × w^MEREC × w^GPM / T × 100
     Inner ring: categories sized by Pct_c,i = S_c,i / T_i × 100
     Centre text: process name
 
@@ -6854,7 +6864,7 @@ def analytics_stakeholder_preference():
 
     # ── Comparison table ──────────────────────────────────────────────────────
     st.divider()
-    st.markdown(f"**Ranking comparison — Original RCW vs {stakeholder}**")
+    st.markdown(f"**Ranking comparison — Original GPM vs {stakeholder}**")
 
     comp_rows = []
     any_change = False
@@ -6866,7 +6876,7 @@ def analytics_stakeholder_preference():
             any_change = True
         comp_rows.append({
             "Alternative": name,
-            "Original PSI rank (RCW)": orig_r,
+            "Original PSI rank (GPM)": orig_r,
             f"New PSI rank ({stakeholder})": new_r,
             "Rank change": (f"+{delta}" if delta > 0
                             else str(delta) if delta != 0 else "—"),
@@ -6879,7 +6889,7 @@ def analytics_stakeholder_preference():
     if any_change:
         st.warning(
             f"⚠️ The ranking changes under {stakeholder}'s weights. "
-            "The current RCW-based ranking is sensitive to this stakeholder's priorities."
+            "The current GPM-based ranking is sensitive to this stakeholder's priorities."
         )
     else:
         st.markdown(f'<div style="background:#E8F5E9;border-left:3px solid #16A34A;padding:8px 12px;border-radius:4px;margin:6px 0;font-family:Times New Roman,Tinos,Times,serif;color:#1B5E20;font-size:13px;">The ranking is identical under the custom weights. The result is robust to this stakeholder profile.</div>', unsafe_allow_html=True)
@@ -6902,7 +6912,7 @@ def analytics_stakeholder_preference():
 
     # ── Weight comparison chart ───────────────────────────────────────────────
     st.divider()
-    st.markdown("**Category weight comparison — RCW vs stakeholder**")
+    st.markdown("**Category weight comparison — GPM vs stakeholder**")
 
     apply_mpl_style()
     x_w = np.arange(n_cats)
@@ -6911,7 +6921,7 @@ def analytics_stakeholder_preference():
     rcw_vals = [round(float(final_w[ci])*100, 1) for ci in range(n_cats)]
     sh_vals  = [custom_weights[c] for c in l3_cats]
     ax.bar(x_w - w_bar/2, rcw_vals, width=w_bar,
-           color="#185FA5", label="RCW (original)", edgecolor="white")
+           color="#185FA5", label="GPM (original)", edgecolor="white")
     ax.bar(x_w + w_bar/2, sh_vals,  width=w_bar,
            color="#EA580C", label="Stakeholder",    edgecolor="white")
     for xi, (rv, sv) in enumerate(zip(rcw_vals, sh_vals)):
@@ -6937,7 +6947,7 @@ def analytics_stakeholder_preference():
     base_vals = [round(float(base_psi[pi]), 4) for pi in range(n_proc)]
     cust_vals  = [round(float(psi_custom[pi]), 4) for pi in range(n_proc)]
     ax.bar(x_p - w_bar_p/2, base_vals, width=w_bar_p,
-           color="#185FA5", label="Original PSI (RCW)", edgecolor="white")
+           color="#185FA5", label="Original PSI (GPM)", edgecolor="white")
     ax.bar(x_p + w_bar_p/2, cust_vals, width=w_bar_p,
            color="#EA580C", label="Stakeholder PSI",    edgecolor="white")
     ax.set_xticks(x_p)
@@ -6954,7 +6964,7 @@ def analytics_stakeholder_preference():
     for pi, name in enumerate(names):
         psi_table_rows.append({
             "Alternative": name,
-            "Original PSI (RCW)": round(float(base_psi[pi]), 4),
+            "Original PSI (GPM)": round(float(base_psi[pi]), 4),
             "Stakeholder PSI": round(float(psi_custom[pi]), 4),
             "Δ PSI": round(float(psi_custom[pi]) - float(base_psi[pi]), 4),
         })
