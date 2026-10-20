@@ -24,9 +24,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from matplotlib import font_manager as fm
-from matplotlib.colors import LinearSegmentedColormap
 import streamlit as st
 import io
 import plotly.graph_objects as go
@@ -904,6 +902,42 @@ CAT_SHORT = {
     "qua": "Q",
     "pro": "P",
 }
+
+_IND_SHORT = {
+    # Environmental
+    "cumulative energy demand": "CED",
+    "co2 emissions":            "CO₂",
+    "co₂ emissions":            "CO₂",
+    "water consumption":        "Water",
+    # Economic
+    "material cost":            "Mat. cost",
+    "machine cost":             "Mach. cost",
+    "labour cost":              "Labour",
+    "consumables cost":         "Consumab.",
+    "energy cost":              "Energy",
+    # Social
+    "recordable injury rate":   "Injury",
+    "job satisfaction":         "Job sat.",
+    "average operator wage":    "Wage",
+    # Quality
+    "tensile strength":         "Tensile",
+    "yield strength":           "Yield",
+    "elongation":               "Elongation",
+    "surface roughness":        "Roughness",
+    "hardness":                 "Hardness",
+    # Productivity
+    "production time":          "Prod. time",
+    "material utilisation":     "Mat. util.",
+    "material utilization":     "Mat. util.",
+    "build rate":               "Build rate",
+    "deposition rate":          "Dep. rate",
+}
+
+
+def short_name(full):
+    """Short indicator label for chart annotations."""
+    return _IND_SHORT.get(full.lower().strip(), full[:10])
+
 
 def proc_short_labels(names):
     """Generate short labels for alternatives to avoid x-axis overlap."""
@@ -2209,7 +2243,6 @@ def build_excel_report():
     # ── Sheet 2: Decision Matrix ──────────────────────────────────────────────
     ws2 = wb.create_sheet("2. Decision Matrix")
     add_title(ws2, "Raw Indicator Values (Decision Matrix)")
-    col = 1
     ws2.cell(3, 1, "Category").font = HDR_FONT
     ws2.cell(3, 1).fill = HDR_FILL
     ws2.cell(3, 1).alignment = HDR_ALIGN
@@ -2625,9 +2658,9 @@ with st.sidebar:
 
 def landing_page():
     st.markdown(
-        f"<div class='prism-hero'>"
-        f"<h1>PRISM</h1>"
-        f"<p>Performance Ranking via Integrated Sustainability Metrics</p></div>",
+        "<div class='prism-hero'>"
+        "<h1>PRISM</h1>"
+        "<p>Performance Ranking via Integrated Sustainability Metrics</p></div>",
         unsafe_allow_html=True,
     )
 
@@ -3535,7 +3568,6 @@ def step10():
     if st.session_state.sel_weight_methods:
         l3_cats = ordered_l3_cats()
         mat = np.array([st.session_state.cat_scores[c] for c in l3_cats])
-        k = len(l3_cats)
 
         sets, labels = [], []
         if "entropy" in st.session_state.sel_weight_methods:
@@ -3664,7 +3696,6 @@ def step11():
                 families_selected.add(family_name)
 
     n_selected = len(st.session_state.sel_mcdm_methods)
-    n_families = len(families_selected)
 
 
 
@@ -3832,7 +3863,6 @@ def step12():
 
         st.divider()
         st.subheader("Ranking across category combinations")
-        n_combo = 2 ** len(l3_cats) - 1
 
         _cs_mat = np.array([cat_scores[c] for c in l3_cats])
         _multi_w = len(selected_weight_sets(_cs_mat, st.session_state.sel_weight_methods)) > 1
@@ -4316,7 +4346,6 @@ def validation_normalisation_sensitivity():
 def validation_bootstrap_merec_rcw():
     st.subheader("6. Bootstrap stability analysis — MEREC and GPM")
 
-    names    = st.session_state.proc_names
     l3_cats  = ordered_l3_cats()
     final_w  = current_final_weights()
     sel_wm   = st.session_state.sel_weight_methods
@@ -4341,8 +4370,10 @@ def validation_bootstrap_merec_rcw():
         st.info("Set parameters above and click Run bootstrap.")
         return
 
-    st.session_state.dash_bs_n_iter = int(n_iter)
-    st.session_state.dash_bs_unc_pct = int(unc_pct)
+    # Dashboard sliders own these keys and are already drawn this run; apply on next rerun.
+    st.session_state["_dash_pending"] = {**st.session_state.get("_dash_pending", {}),
+                                         "dash_bs_n_iter": int(n_iter),
+                                         "dash_bs_unc_pct": int(unc_pct)}
     st.session_state.pop("validation_dashboard_results", None)
 
     rng = np.random.default_rng(42)
@@ -4426,7 +4457,6 @@ def validation_bootstrap_merec_rcw():
             mean = float(boot_arr[:, j].mean())
             cv   = float(boot_arr[:, j].std(ddof=0) / mean * 100) if mean > 0 else 0.0
             # Stable if observed rank matches bootstrap mean rank
-            obs_rank   = int(np.argsort(-observed)[j] + 1) if len(observed) > 1 else 1
             stable = lo <= obs <= hi
             if not stable:
                 all_stable = False
@@ -4695,8 +4725,9 @@ def validation_indicator_uncertainty():
         )
         return
 
-    st.session_state.dash_ind_unc_iter = int(n_iter)
-    st.session_state.dash_ind_unc_pct = int(unc_pct)
+    st.session_state["_dash_pending"] = {**st.session_state.get("_dash_pending", {}),
+                                         "dash_ind_unc_iter": int(n_iter),
+                                         "dash_ind_unc_pct": int(unc_pct)}
     st.session_state.pop("validation_dashboard_results", None)
 
     rng      = np.random.default_rng(42)
@@ -4993,7 +5024,6 @@ def _assess_power_spectrum(winner_idx, l3_cats, cat_scores, methods):
 
 
 def _assess_bc_sensitivity(winner_idx, l3_cats, methods, method_ranks, sel_wm):
-    names = st.session_state.proc_names
     multi = len(methods) > 1
     base_rank = _winner_headline_rank(method_ranks, methods, winner_idx, 0.5)
 
@@ -5035,8 +5065,6 @@ def _assess_bc_sensitivity(winner_idx, l3_cats, methods, method_ranks, sel_wm):
 
 
 def _assess_monte_carlo(winner_idx, l3_cats, cat_scores, methods, final_w, n_iter=1000):
-    names = st.session_state.proc_names
-    n_proc = len(names)
     mat = np.array([cat_scores[c] for c in l3_cats])
     k_value, _, _, _ = compute_dirichlet_k(mat)
     alpha_scale = 1.0 + (k_value / 100.0) * 49.0
@@ -5392,37 +5420,39 @@ def validation_intro():
             "recommended winner from Step 12."
         )
 
+    for k, v in st.session_state.pop("_dash_pending", {}).items():
+        st.session_state[k] = v
+    for k, d in (("dash_bs_n_iter", 500), ("dash_bs_unc_pct", 10),
+                 ("dash_ind_unc_iter", 500), ("dash_ind_unc_pct", 10)):
+        st.session_state.setdefault(k, d)
+
     st.markdown("**Dashboard iteration settings**")
     dc1, dc2, dc3, dc4 = st.columns(4)
     with dc1:
         st.slider(
             "Bootstrap iterations",
-            min_value=100, max_value=2000,
-            value=int(st.session_state.get("dash_bs_n_iter", 500)), step=100,
+            min_value=100, max_value=2000, step=100,
             key="dash_bs_n_iter",
             help="Iterations for check 6 in the dashboard summary.",
         )
     with dc2:
         st.slider(
             "Bootstrap ±%",
-            min_value=1, max_value=50,
-            value=int(st.session_state.get("dash_bs_unc_pct", 10)), step=1,
+            min_value=1, max_value=50, step=1,
             key="dash_bs_unc_pct",
             help="Indicator noise range for dashboard bootstrap check.",
         )
     with dc3:
         st.slider(
             "Indicator uncertainty iterations",
-            min_value=100, max_value=10000,
-            value=int(st.session_state.get("dash_ind_unc_iter", 500)), step=100,
+            min_value=100, max_value=10000, step=100,
             key="dash_ind_unc_iter",
             help="Iterations for check 7 in the dashboard summary.",
         )
     with dc4:
         st.slider(
             "Indicator uncertainty ±%",
-            min_value=1, max_value=50,
-            value=int(st.session_state.get("dash_ind_unc_pct", 10)), step=1,
+            min_value=1, max_value=50, step=1,
             key="dash_ind_unc_pct",
             help="Indicator noise range for dashboard uncertainty check.",
         )
@@ -6164,40 +6194,6 @@ def analytics_combined_contribution():
 
     shorts_c = proc_short_labels(names)
 
-    # ── Short name map for chart labels ───────────────────────────────────────
-    _SHORT = {
-        # Environmental
-        "cumulative energy demand": "CED",
-        "co2 emissions":            "CO₂",
-        "co₂ emissions":            "CO₂",
-        "water consumption":        "Water",
-        # Economic
-        "material cost":            "Mat. cost",
-        "machine cost":             "Mach. cost",
-        "labour cost":              "Labour",
-        "consumables cost":         "Consumab.",
-        "energy cost":              "Energy",
-        # Social
-        "recordable injury rate":   "Injury",
-        "job satisfaction":         "Wage",
-        "average operator wage":    "Wage",
-        # Quality
-        "tensile strength":         "Tensile",
-        "yield strength":           "Yield",
-        "elongation":               "Elongation",
-        "surface roughness":        "Roughness",
-        "hardness":                 "Hardness",
-        # Productivity
-        "production time":          "Prod. time",
-        "material utilisation":     "Mat. util.",
-        "material utilization":     "Mat. util.",
-        "build rate":               "Build rate",
-        "deposition rate":          "Dep. rate",
-    }
-
-    def short_name(full):
-        return _SHORT.get(full.lower().strip(), full[:10])
-
     # ── Pre-build outer colours ────────────────────────────────────────────────
     cat_counts = {}
     for ck in ind_cat_key:
@@ -6213,9 +6209,6 @@ def analytics_combined_contribution():
         r,g,b = (int(hex_c[i:i+2],16)/255 for i in (0,2,4))
         outer_colors_base.append((r, g, b, alpha))
         cat_idx[ck] = idx + 1
-
-    from matplotlib.patches import Patch
-    import matplotlib.patheffects as pe
 
     for pi, name in enumerate(names):
         apply_mpl_style()
@@ -6496,257 +6489,11 @@ def analytics_leave_one_out():
         )
 
 
-def analytics_category_intro():
-    pass  # replaced by analytics_combined_contribution
-
-
-
-def analytics_indicator_contribution():
-    """
-    Indicator contribution — nested donut (sunburst) chart per process.
-
-    Outer ring: indicators sized by Pct^PSI_j,i = n2 × w^MEREC × w^GPM / T × 100
-    Inner ring: categories sized by Pct_c,i = S_c,i / T_i × 100
-    Centre text: process name
-
-    Also shows summary tables below the charts.
-    """
-    st.subheader("A. Indicator contribution to weighted MCDM input")
-
-    names    = st.session_state.proc_names
-    n_proc   = len(names)
-    l3_cats  = ordered_l3_cats()
-    n2_data  = st.session_state.n2_data
-    merec_w  = st.session_state.merec_w
-    final_w  = current_final_weights()
-    method_ranks = st.session_state.get("last_method_ranks", {})
-    sel_mcdm = list(st.session_state.sel_mcdm_methods) or ALL_MCDM_KEYS
-    multi    = len(sel_mcdm) > 1
-
-    p_val = st.slider("p value (PSI)", min_value=0.0, max_value=1.0,
-                       value=0.5, step=0.01, key="ind_contrib_p",
-                       help=FIELD_HELP["psi_p"])
-
-    if multi and method_ranks:
-        psi_scores = calc_psi(method_ranks, sel_mcdm, p_val)
-    else:
-        psi_scores = np.ones(n_proc)
-
-    # ── Pre-compute S_c,i and T_i ─────────────────────────────────────────────
-    S_cat = np.array([
-        st.session_state.cat_scores[c] * final_w[ci]
-        for ci, c in enumerate(l3_cats)
-    ])  # (n_cats, n_proc)
-    T = S_cat.sum(axis=0)  # (n_proc,)
-
-    # ── Build flat indicator lists for outer ring ─────────────────────────────
-    # For each indicator: category key, label, full-PSI pct per process
-    ind_labels  = []   # display label
-    ind_units_l = []
-    ind_cat_key = []   # which category it belongs to
-    ind_psi_pct = []   # (n_ind_total, n_proc) — outer ring sizes
-    ind_within  = []   # (n_ind_total, n_proc) — within-category share
-    ind_merec_w = []
-
-    for ci, ckey in enumerate(l3_cats):
-        ind_names, ind_units, _ = get_full_indicators(ckey)
-        n_ind = len(ind_names)
-        n2    = n2_data[ckey]
-        w_ind = merec_w[ckey]
-        u = n2 * w_ind[:, None]
-        cat_total = u.sum(axis=0)
-        shares = np.where(cat_total > 0, u / cat_total * 100, 0.0)
-        psi_pct = np.where(T > 0, u * final_w[ci] / T * 100, 0.0)
-
-        for j in range(n_ind):
-            ind_labels.append(ind_names[j])
-            ind_units_l.append(ind_units[j])
-            ind_cat_key.append(ckey)
-            ind_psi_pct.append(psi_pct[j])
-            ind_within.append(shares[j])
-            ind_merec_w.append(float(w_ind[j]))
-
-    ind_psi_pct = np.array(ind_psi_pct)   # (n_ind_total, n_proc)
-    ind_within  = np.array(ind_within)
-
-    # Category pct for inner ring
-    cat_pct = np.where(T > 0, S_cat / T * 100, 0.0)  # (n_cats, n_proc)
-
-    # ── Draw one nested donut per process ─────────────────────────────────────
-    n_cats  = len(l3_cats)
-    n_total = len(ind_labels)
-    from matplotlib.patches import Patch
-
-    # Short process labels for centre
-    shorts_c = proc_short_labels(names)
-
-    # Pre-build outer colours (category colour + alpha shading per indicator)
-    cat_alpha_counts = {}
-    for j in range(n_total):
-        ck = ind_cat_key[j]
-        cat_alpha_counts[ck] = cat_alpha_counts.get(ck, 0) + 1
-
-    def make_outer_colors():
-        cat_alpha_idx = {}
-        cols = []
-        for j in range(n_total):
-            ck = ind_cat_key[j]
-            idx   = cat_alpha_idx.get(ck, 0)
-            count = cat_alpha_counts[ck]
-            alpha = 0.42 + 0.58 * (idx / max(count - 1, 1))
-            hex_c = CATS[ck]["color"].lstrip("#")
-            r,g,b = (int(hex_c[i:i+2],16)/255 for i in (0,2,4))
-            cols.append((r, g, b, alpha))
-            cat_alpha_idx[ck] = idx + 1
-        return cols
-
-    outer_colors_base = make_outer_colors()
-
-    # One large figure per process — stacked vertically for readability
-    for pi, name in enumerate(names):
-
-        apply_mpl_style()
-        # Large square figure — one per process
-        fig, ax = plt.subplots(figsize=(7.5, 7.5))
-
-        inner_sizes  = [float(cat_pct[ci, pi]) for ci in range(n_cats)]
-        inner_colors = [CATS[ckey]["color"] for ckey in l3_cats]
-        inner_labels = [CATS[ckey]["label"] for ckey in l3_cats]
-        outer_sizes  = [max(float(ind_psi_pct[j, pi]), 0.001)
-                        for j in range(n_total)]
-
-        # ── Inner ring — categories ──────────────────────────────────────────
-        wedges_inner, _ = ax.pie(
-            inner_sizes,
-            radius=0.52,
-            colors=inner_colors,
-            startangle=90,
-            wedgeprops=dict(width=0.26, edgecolor="white", linewidth=1.5),
-            labels=None,
-        )
-
-        # ── Outer ring — indicators ──────────────────────────────────────────
-        wedges_outer, _ = ax.pie(
-            outer_sizes,
-            radius=1.0,
-            colors=outer_colors_base,
-            startangle=90,
-            wedgeprops=dict(width=0.44, edgecolor="white", linewidth=1.0),
-            labels=None,
-        )
-
-        # ── Centre text — short process name + PSI ────────────────────────────
-        ax.text(0, 0.07, shorts_c[pi],
-                ha="center", va="center", fontsize=13, fontweight="bold",
-                fontfamily="Times New Roman", color="#0D2B5E")
-        if multi and method_ranks:
-            ax.text(0, -0.13, f"PSI = {psi_scores[pi]:.4f}",
-                    ha="center", va="center", fontsize=9,
-                    fontfamily="Times New Roman", color="#444444")
-
-        # ── Category labels on inner ring ─────────────────────────────────────
-        for ci, (wedge, lbl, sz) in enumerate(
-                zip(wedges_inner, inner_labels, inner_sizes)):
-            if sz < 4:
-                continue
-            ang = (wedge.theta1 + wedge.theta2) / 2
-            x = 0.39 * np.cos(np.deg2rad(ang))
-            y = 0.39 * np.sin(np.deg2rad(ang))
-            ax.text(x, y, lbl[:3], ha="center", va="center",
-                    fontsize=7.5, fontweight="bold",
-                    fontfamily="Times New Roman", color="white")
-
-        # ── Data labels on outer ring — indicator short name + % ─────────────
-        for j, (wedge, sz) in enumerate(zip(wedges_outer, outer_sizes)):
-            # Show ALL slices — use shorter label for tiny ones
-            ang  = (wedge.theta1 + wedge.theta2) / 2
-            xl   = 1.14 * np.cos(np.deg2rad(ang))
-            yl   = 1.14 * np.sin(np.deg2rad(ang))
-            ha   = "left" if np.cos(np.deg2rad(ang)) >= 0 else "right"
-            if sz < 2.0:
-                label_txt = f"{sz:.1f}%"   # % only for tiny slices
-            else:
-                label_txt = f"{short_name(ind_labels[j])}  {sz:.1f}%"
-            ax.text(xl, yl, label_txt,
-                    ha=ha, va="center",
-                    fontsize=7.5, fontfamily="Times New Roman",
-                    color="#222222",
-                    bbox=dict(boxstyle="round,pad=0.15", fc="white",
-                              ec="none", alpha=0.85))
-
-        # ── Indicator legend — right side ─────────────────────────────────────
-        legend_patches = []
-        for j in range(n_total):
-            lbl = f"{ind_labels[j]} ({ind_units_l[j]})  {float(ind_psi_pct[j,pi]):.1f}%"
-            legend_patches.append(
-                Patch(facecolor=outer_colors_base[j], label=lbl)
-            )
-        ax.legend(
-            handles=legend_patches,
-            loc="center left",
-            bbox_to_anchor=(1.02, 0.5),
-            fontsize=7.5,
-            frameon=True,
-            framealpha=0.9,
-            edgecolor="#cccccc",
-            title="Indicators",
-            title_fontsize=8,
-            prop={"family": "Times New Roman", "size": 7.5},
-        )
-
-        ax.set_title(
-            f"{name}",
-            fontsize=12, fontweight="bold",
-            fontfamily="Times New Roman", color="#0D2B5E", pad=10,
-        )
-        ax.set_aspect("equal")
-        plt.tight_layout()
-        mpl_show(fig)
-
-    # ── Summary tables below charts ───────────────────────────────────────────
-    with st.expander("Detailed tables"):
-        for ci, ckey in enumerate(l3_cats):
-            cat = CATS[ckey]
-            ind_names, ind_units, _ = get_full_indicators(ckey)
-            n_ind = len(ind_names)
-            n2    = n2_data[ckey]
-            w_ind = merec_w[ckey]
-            u = n2 * w_ind[:, None]
-            cat_total = u.sum(axis=0)
-            shares = np.where(cat_total > 0, u / cat_total * 100, 0.0)
-            psi_pct_this = np.where(T > 0, u * final_w[ci] / T * 100, 0.0)
-
-            st.markdown(
-                f"<span style='background:{cat['bg']};color:{cat['color']};"
-                f"padding:2px 10px;border-radius:12px;font-size:13px;"
-                f"font-weight:600;font-family:Times New Roman,Tinos,serif;'>"
-                f"{cat['label']}</span>", unsafe_allow_html=True,
-            )
-            rows_s = []
-            for j in range(n_ind):
-                row = {"Indicator": f"{ind_names[j]} ({ind_units[j]})",
-                       "MEREC weight": round(float(w_ind[j]), 4)}
-                for pi, pname in enumerate(names):
-                    row[f"{pname} within-cat (%)"] = round(float(shares[j, pi]), 1)
-                for pi, pname in enumerate(names):
-                    row[f"{pname} full (%)"] = round(float(psi_pct_this[j, pi]), 1)
-                rows_s.append(row)
-            total_row = {"Indicator": "Total", "MEREC weight": ""}
-            for pi, pname in enumerate(names):
-                total_row[f"{pname} within-cat (%)"] = 100.0
-                total_row[f"{pname} full (%)"] = round(float(psi_pct_this[:, pi].sum()), 1)
-            rows_s.append(total_row)
-            st.dataframe(pd.DataFrame(rows_s),
-                         use_container_width=True, hide_index=True)
-            st.write("")
-
-
 @with_gpm_picker("ailoo")
 def analytics_indicator_loo():
     st.subheader("B. Leave-one-out indicator analysis")
-    
+
     names = st.session_state.proc_names
-    n_proc = len(names)
     l3_cats = ordered_l3_cats()
     cat_scores = st.session_state.cat_scores
     sel_weight_methods = st.session_state.sel_weight_methods
@@ -6861,11 +6608,6 @@ def analytics_indicator_loo():
         )
 
 
-def analytics_indicator_intro():
-    pass  # replaced by analytics_combined_contribution
-
-
-
 @with_gpm_picker("astake")
 def analytics_stakeholder_preference():
     st.subheader("3. Stakeholder preference simulation")
@@ -6978,7 +6720,7 @@ def analytics_stakeholder_preference():
             "The current GPM-based ranking is sensitive to this stakeholder's priorities."
         )
     else:
-        st.markdown(f'<div style="background:#E8F5E9;border-left:3px solid #16A34A;padding:8px 12px;border-radius:4px;margin:6px 0;font-family:Times New Roman,Tinos,Times,serif;color:#1B5E20;font-size:13px;">The ranking is identical under the custom weights. The result is robust to this stakeholder profile.</div>', unsafe_allow_html=True)
+        st.markdown('<div style="background:#E8F5E9;border-left:3px solid #16A34A;padding:8px 12px;border-radius:4px;margin:6px 0;font-family:Times New Roman,Tinos,Times,serif;color:#1B5E20;font-size:13px;">The ranking is identical under the custom weights. The result is robust to this stakeholder profile.</div>', unsafe_allow_html=True)
 
     # ── Method-by-method breakdown ────────────────────────────────────────────
     st.divider()
