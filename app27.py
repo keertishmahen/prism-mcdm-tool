@@ -3722,6 +3722,8 @@ def step12():
 
     st.dataframe(pd.DataFrame(rows, columns=cols), use_container_width=True, hide_index=True)
 
+    if not multi:
+        st.info("The PSI dot plot needs at least two MCDM methods. Select more in Step 11.")
     if multi:
         st.divider()
         st.subheader("PSI dot plot across power-mean consolidations")
@@ -3755,9 +3757,10 @@ def step12():
         mat_cat = np.array([cat_scores[c] for c in l3_cats])
         gsets = selected_weight_sets(mat_cat, st.session_state.sel_weight_methods)
         if len(gsets) < 2:
-            st.info("Select at least two weighting methods in Step 10 to compare power-mean "
-                    "consolidation cases.")
-        else:
+            gsets = selected_weight_sets(mat_cat, {"entropy", "critic", "cilos"})
+            st.info("Fewer than two weighting methods are selected in Step 10, so this comparison "
+                    "uses Entropy, CRITIC and CILOS together.")
+        if len(gsets) >= 2:
             case_list = gpm_case_weights(gsets)
             case_psi, case_rank, case_mr = [], [], []
             for hdr, w_case in case_list:
@@ -3768,34 +3771,41 @@ def step12():
                 case_psi.append(np.asarray(psi_c, dtype=float))
                 case_rank.append(rank_with_ties(psi_c, ascending=False))
 
-            apply_mpl_style()
             n_case = len(case_list)
-            fig, ax = plt.subplots(figsize=(8, 0.62 * n_case + 1.8))
-            ys = list(range(n_case))[::-1]
-            for ci, (hdr, _) in enumerate(case_list):
-                y = ys[ci]
-                vals = case_psi[ci]
-                ax.hlines(y, vals.min(), vals.max(), color="#D1D5DB", linewidth=1.5, zorder=1)
-                for i, name in enumerate(names):
-                    ax.scatter(vals[i], y, s=210, color=PROC_COLORS[i % len(PROC_COLORS)],
-                               edgecolor="white", linewidth=0.8, zorder=3,
-                               label=name if ci == 0 else None)
-                    ax.text(vals[i], y, str(int(case_rank[ci][i])), ha="center", va="center",
-                            fontsize=7, color="white", fontweight="bold", zorder=4)
-            ax.set_yticks(ys)
-            ax.set_yticklabels([h for h, _ in case_list], fontsize=9)
+            hdrs = [h for h, _ in case_list]
             fwd_label = st.session_state.get("gpm_forward_label")
-            for tl in ax.get_yticklabels():
-                if tl.get_text() == fwd_label:
-                    tl.set_fontweight("bold")
-            ax.set_ylim(-0.7, n_case - 0.3)
-            ax.set_xlabel(f"PSI score at p = {p_val:.2f}  (number in dot = PSI rank)", fontsize=10)
-            ax.grid(axis="x", alpha=0.3)
-            ax.tick_params(labelsize=9)
-            ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=len(names),
-                      fontsize=9, frameon=False)
-            plt.tight_layout()
-            mpl_show(fig)
+            dot_colors = ["#2563EB", "#16A34A", "#EA580C", "#9333EA", "#0891B2",
+                          "#DC2626", "#CA8A04", "#DB2777", "#4B5563", "#0D9488"]
+            all_psi = np.concatenate(case_psi)
+            pad = (all_psi.max() - all_psi.min() or 0.1) * 0.08
+            fig = go.Figure()
+            for ci, h in enumerate(hdrs):
+                fig.add_trace(go.Scatter(
+                    x=[case_psi[ci].min(), case_psi[ci].max()], y=[h, h], mode="lines",
+                    line=dict(color="#D1D5DB", width=3), hoverinfo="skip", showlegend=False))
+            for i, name in enumerate(names):
+                fig.add_trace(go.Scatter(
+                    x=[float(case_psi[ci][i]) for ci in range(n_case)], y=hdrs,
+                    mode="markers+text", name=name,
+                    text=[str(int(case_rank[ci][i])) for ci in range(n_case)],
+                    textposition="middle center", textfont=dict(color="white", size=12),
+                    marker=dict(size=26, color=dot_colors[i % len(dot_colors)],
+                                line=dict(color="white", width=1.5)),
+                    customdata=[[int(case_rank[ci][i])] for ci in range(n_case)],
+                    hovertemplate=(f"<b>{name}</b><br>%{{y}}<br>PSI %{{x:.4f}}"
+                                   "<br>PSI rank %{customdata[0]}<extra></extra>")))
+            fig.update_yaxes(categoryorder="array", categoryarray=hdrs[::-1], tickvals=hdrs,
+                             ticktext=[f"<b>{h}</b>" if h == fwd_label else h for h in hdrs],
+                             showgrid=False, automargin=True)
+            fig.update_xaxes(range=[all_psi.min() - pad, all_psi.max() + pad],
+                             title=f"PSI score at p = {p_val:.2f}  (number in dot = PSI rank)",
+                             showgrid=True, gridcolor="#E5E7EB", zeroline=False)
+            fig.update_layout(
+                height=150 + 62 * n_case, margin=dict(l=20, r=20, t=50, b=50),
+                plot_bgcolor="white", paper_bgcolor="white",
+                font=dict(family="Times New Roman, Tinos, serif", size=13),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
+            st.plotly_chart(fig, use_container_width=True)
             st.caption("Bold row = consolidation carried forward from Step 10 (used in the table above).")
 
             hdrs = [h for h, _ in case_list]
