@@ -6,15 +6,16 @@ Levels:
   1. System definition (alternatives, categories, custom indicators, units, indicator values)
   1.5 Correlation check (within-category Spearman correlation review, informational)
   2. Indicator processing (MEREC normalisation/weights, N2 normalisation, category scores)
-  3. Decision aggregation (Entropy/CRITIC weighting + GPM consolidation,
+  3. Decision aggregation (Entropy/CRITIC/CILOS weighting + GPM consolidation,
                             TOPSIS/VIKOR/ELECTRE-Score/MULTIMOORA/WASPAS, PSI compromise ranking,
                             category-combination rank-stability scatter)
-  4. Optional validation: weighting-method sensitivity, benefit/cost indicator
+  4. Optional verification: weighting-method sensitivity, benefit/cost indicator
      sensitivity, Monte Carlo Dirichlet uncertainty.
 
 Run with:  streamlit run app.py
 """
 
+import functools
 import itertools
 import os
 import base64
@@ -110,13 +111,14 @@ FIELD_HELP = {
     "weight_equal": "Treat every selected category as equally important.",
     "weight_entropy": "Weight categories by data dispersion — more variation means higher influence.",
     "weight_critic": "Weight by contrast and correlation — distinct, non-redundant categories score higher.",
+    "weight_cilos": "Weight by criteria impact loss — captures how much the other categories lose when an alternative is chosen for its best performance in one category.",
     "mcdm_method": "Ranking technique applied to weighted category scores before PSI aggregation.",
     "psi_p": _PSI_HELP,
     "combo_p": "p value used when computing PSI ranks across every category subset combination.",
     "psi_combo_p": "p for the PSI-combo tie-breaker when multiple alternatives share rank 1.",
     "analytics_tool": "Optional post-results analysis — contribution, leave-one-out, or stakeholder simulation.",
     "rr_exclude": "Temporarily remove alternatives to test whether rankings reverse.",
-    "alt_norm": "Alternative normalisation method to compare against the default N2 scaling.",
+    "alt_norm": "Alternative normalisation method to compare against the linear sum-based (N2) baseline.",
     "unc_pct": "Percentage perturbation applied to indicator values in uncertainty analysis.",
     "n_iter": "Number of Monte Carlo or bootstrap iterations — higher values give smoother estimates.",
     "mc_k": "Dirichlet concentration parameter — lower k means more weight uncertainty.",
@@ -1063,6 +1065,45 @@ def critic_weights(mat):
     return C / total
 
 
+def cilos_weights(mat):
+    """
+    CILOS (Criteria Impact LOSs) objective weights (Zavadskas & Podvezko, 2016).
+    mat: categories (criteria) x alternatives, all benefit-type scores.
+
+      1. Normalise each criterion by its maximum: r_ij = x_ij / max_i x_ij.
+      2. For each criterion j take its best alternative k_j and compute the relative
+         loss in every criterion i: a_ij = (max r_i - r_i,k_j) / max r_i.
+      3. Build the weight-system matrix F: f_ij = a_ij (i != j),
+         f_ii = -sum_{j != i} a_ji.
+      4. Solve F q = 0 with sum(q) = 1; q are the CILOS weights.
+    """
+    mat = np.asarray(mat, dtype=float)
+    k, n = mat.shape
+    if k < 2:
+        return np.ones(k)
+    R = np.ones_like(mat)
+    for j in range(k):
+        mx = mat[j].max()
+        if mx > 0:
+            R[j] = mat[j] / mx
+    best = R.argmax(axis=1)
+    A = np.zeros((k, k))
+    for j in range(k):
+        for i in range(k):
+            if i != j:
+                A[i, j] = 1.0 - R[i, best[j]]
+    F = A.copy()
+    for i in range(k):
+        F[i, i] = -A[:, i].sum()
+    M = np.vstack([F, np.ones(k)])
+    b = np.zeros(k + 1)
+    b[-1] = 1.0
+    q = np.linalg.lstsq(M, b, rcond=None)[0]
+    q = np.clip(q, 0.0, None)
+    tot = q.sum()
+    return q / tot if tot > 1e-12 else np.full(k, 1.0 / k)
+
+
 def power_mean_weights(weight_sets, p):
     """
     Generalised power mean per category:
@@ -1092,10 +1133,11 @@ GPM_DEFAULT_LABEL = "p = 1 (Arithmetic)"
 
 
 def selected_weight_sets(mat, weight_methods):
-    """Weight vectors (Entropy, CRITIC) for the selected weighting methods."""
+    """Weight vectors (Entropy, CRITIC, CILOS) for the selected weighting methods."""
     sets = []
     if "entropy" in weight_methods: sets.append(entropy_weights(mat))
     if "critic"  in weight_methods: sets.append(critic_weights(mat))
+    if "cilos"   in weight_methods: sets.append(cilos_weights(mat))
     return sets
 
 
@@ -1310,7 +1352,11 @@ ALL_MCDM_KEYS = ["topsis", "vikor", "electre", "multimoora", "waspas"]
 WEIGHT_COMBO_SETS = [
     (("entropy",), "Entropy"),
     (("critic",), "CRITIC"),
+    (("cilos",), "CILOS"),
     (("entropy", "critic"), "GPM(En+Cr)"),
+    (("entropy", "cilos"), "GPM(En+Ci)"),
+    (("critic", "cilos"), "GPM(Cr+Ci)"),
+    (("entropy", "critic", "cilos"), "GPM(En+Cr+Ci)"),
 ]
 
 
@@ -1337,10 +1383,61 @@ def get_category_weights(mat, weight_methods):
     sets = []
     if "entropy" in weight_methods: sets.append(entropy_weights(mat))
     if "critic"  in weight_methods: sets.append(critic_weights(mat))
+    if "cilos"   in weight_methods: sets.append(cilos_weights(mat))
     if not sets:
         return np.full(k, 1.0 / k)
-    p = float(st.session_state.get("gpm_forward_p", 1.0))
-    return gpm_consolidate(sets, p) if len(sets) > 1 else sets[0]
+    p = st.session_state.get("gpm_override_p")
+    if p is None:
+        p = st.session_state.get("gpm_forward_p", 1.0)
+    return gpm_consolidate(sets, float(p)) if len(sets) > 1 else sets[0]
+
+
+def current_final_weights():
+    """Category weights for the analysis in progress: the power-mean case picked for it
+    (gpm_override_p) or, when none is set, the case carried forward from Step 10."""
+    p = st.session_state.get("gpm_override_p")
+    if p is None:
+        return st.session_state.final_cat_weights
+    mat = np.array([st.session_state.cat_scores[c] for c in ordered_l3_cats()])
+    sets = selected_weight_sets(mat, st.session_state.sel_weight_methods)
+    return gpm_consolidate(sets, float(p)) if len(sets) > 1 else sets[0]
+
+
+def gpm_picker(key, title="Power mean for weight consolidation"):
+    """Let the user choose which power-mean case an analysis uses (default: the case
+    carried forward from Step 10). Returns the exponent p."""
+    fwd_p = float(st.session_state.get("gpm_forward_p", 1.0))
+    if len(st.session_state.get("sel_weight_methods", ())) < 2:
+        return fwd_p
+    labels = [lab for _, lab in GPM_CASES]
+    fwd_label = st.session_state.get("gpm_forward_label")
+    idx = labels.index(fwd_label) if fwd_label in labels else labels.index(GPM_DEFAULT_LABEL)
+    choice = st.selectbox(
+        title, labels, index=idx, key=f"gpm_pick_{key}",
+        help="Entropy, CRITIC and CILOS weights are consolidated with this power mean "
+             "inside this analysis. The default is the case carried forward from Step 10.")
+    return {lab: pp for pp, lab in GPM_CASES}[choice]
+
+
+def with_gpm_picker(key):
+    """Decorator: show the power-mean selector, then run the analysis with that case."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **k):
+            p = gpm_picker(key)
+            prev = st.session_state.get("gpm_override_p")
+            st.session_state["gpm_override_p"] = p
+            try:
+                return fn(*a, **k)
+            finally:
+                st.session_state["gpm_override_p"] = prev
+        return wrapper
+    return deco
+
+
+def _dash_gpm_p():
+    lab = st.session_state.get("gpm_pick_dash")
+    return {l: pp for pp, l in GPM_CASES}.get(lab, float(st.session_state.get("gpm_forward_p", 1.0)))
 
 
 def run_mcdm_suite(weighted_mat, weights, methods):
@@ -1614,11 +1711,11 @@ def _build_decision_support_tables(winner_info):
                 "Impact": "Ranking sensitive to weight uncertainty",
             })
 
-    val_choice = st.session_state.get("validation_choice", "None - skip validation")
+    val_choice = st.session_state.get("validation_choice", "None - skip verification")
     if val_choice and not val_choice.startswith("None"):
         val_label = val_choice.split(". ", 1)[-1] if ". " in val_choice else val_choice
         strengths.append({
-            "Evidence": "Validation reviewed",
+            "Evidence": "Verification reviewed",
             "Source": "Step 13",
             "Result": val_label,
             "Interpretation": "Robustness check reviewed — see Step 13 for details",
@@ -1643,17 +1740,18 @@ def _build_decision_support_tables(winner_info):
 
 
 def compute_dirichlet_k(mat):
-    """Inter-method agreement (0-100) between the Entropy and CRITIC weight vectors."""
+    """Inter-method agreement (0-100) between the Entropy, CRITIC and CILOS weight vectors."""
     w_en = entropy_weights(mat)
     w_cr = critic_weights(mat)
-    W = np.array([w_en, w_cr])
-    n_methods = 2
+    w_ci = cilos_weights(mat)
+    W = np.array([w_en, w_cr, w_ci])
+    n_methods = 3
     var_per_cat = W.var(axis=0, ddof=0)
     mean_var = var_per_cat.mean()
     max_var = ((n_methods - 1) * (1 / n_methods) ** 2 + (1 - 1 / n_methods) ** 2) / n_methods
     dispersion_ratio = min(mean_var / max_var, 1.0) if max_var > 0 else 0.0
     agreement = 1 - dispersion_ratio
-    return agreement * 100, w_en, w_cr
+    return agreement * 100, w_en, w_cr, w_ci
 
 
 # ============================================================================
@@ -1677,7 +1775,7 @@ def init_state():
         "computed": False,
         "corr_acknowledged": False,
         "outliers_acknowledged": False,
-        "validation_choice": "None - skip validation",
+        "validation_choice": "None - skip verification",
         "disabled_indicators": set(),  # set of (ckey, j) tuples
     }
     for k, v in defaults.items():
@@ -1822,7 +1920,7 @@ STEP_LABELS = [
     "1. Alternatives", "2. Categories", "3. Custom indicators", "4. Units",
     "5. Indicators", "6. Correlation check", "7. MEREC weights",
     "8. Category scores", "9. Level 3 categories", "10. Category weights",
-    "11. MCDM methods", "12. Results", "13. Validation (optional)",
+    "11. MCDM methods", "12. Results", "13. Verification (optional)",
     "14. Analytics (optional)", "15. Decision support",
 ]
 
@@ -1832,7 +1930,7 @@ HOW_TO_USE_STEPS = [
     ("7–8", "Indicator processing", "Review MEREC weights, then inspect category scores (radar chart when multiple categories are selected)."),
     ("9–11", "Decision aggregation", "Choose Level 3 categories, select inter-category weighting methods, then pick MCDM methods for ranking."),
     ("12", "Results", "Compare MCDM rankings, PSI compromise scores, and category-combination sensitivity."),
-    ("13", "Validation (optional)", "Run robustness checks — weight sensitivity, normalisation, Monte Carlo, bootstrap, and more."),
+    ("13", "Verification (optional)", "Run robustness checks — weight sensitivity, normalisation, Monte Carlo, bootstrap, and more."),
     ("14", "Analytics (optional)", "Contribution analysis, leave-one-out tests, and stakeholder preference simulation."),
     ("15", "Decision support", "Review the recommended winner with structured strengths and weaknesses tables, then download the full Excel report (Steps 1–15)."),
 ]
@@ -1845,9 +1943,9 @@ METHOD_DESCRIPTIONS = [
         "Role in PRISM": "Intra-category weighting — combines normalised indicators into a single category score.",
     },
     {
-        "Method": "N2 normalisation",
+        "Method": "Linear sum-based (N2) normalisation",
         "Stage": "Indicator processing",
-        "Plain-language description": "Scales raw indicator values to a common 0–1 range so benefit and cost indicators can be compared fairly.",
+        "Plain-language description": "Scales each indicator by the sum of its values across alternatives (cost indicators use reciprocals), so benefit and cost indicators can be compared fairly. This is the fixed baseline; other normalisations appear only in the sensitivity check.",
         "Role in PRISM": "Prepares the decision matrix before MEREC weighting and category scoring.",
     },
     {
@@ -1863,9 +1961,15 @@ METHOD_DESCRIPTIONS = [
         "Role in PRISM": "Objective weighting that accounts for both contrast and inter-category correlation.",
     },
     {
+        "Method": "CILOS",
+        "Stage": "Inter-category weighting",
+        "Plain-language description": "Criteria Impact LOSs — measures how much every category loses when an alternative is chosen for its best performance in one category, and weights categories by this impact loss.",
+        "Role in PRISM": "Objective weighting based on the trade-off losses between categories.",
+    },
+    {
         "Method": "GPM",
         "Stage": "Inter-category weighting",
-        "Plain-language description": "Generalised Power Mean Consolidation — consolidates Entropy and CRITIC weights with a power mean. Because no single consolidation is proven best, five cases are reported (p = −∞ min, −1 harmonic, 0 geometric, 1 arithmetic, +∞ max). One case is carried forward to the later steps.",
+        "Plain-language description": "Generalised Power Mean Consolidation — consolidates the selected objective weights (Entropy, CRITIC, CILOS) with a power mean. Because no single consolidation is proven best, five cases are reported (p = −∞ min, −1 harmonic, 0 geometric, 1 arithmetic, +∞ max). One case is carried forward to the later steps.",
         "Role in PRISM": "Inter-category weighting and consolidation before MCDM aggregation.",
     },
     {
@@ -1953,7 +2057,7 @@ def how_to_use_page():
         "<p class='prism-about-body' style='font-family:Inter,sans-serif;"
         "font-size:11pt;line-height:1.75;color:#1A202C;margin-bottom:16px;'>"
         "Follow the guided workflow from Step 1 through Step 15. "
-        "Steps 1–12 cover the core assessment; Steps 13–14 are optional validation "
+        "Steps 1–12 cover the core assessment; Steps 13–14 are optional verification "
         "and analytics; Step 15 provides decision support and the full Excel report."
         "</p>",
         unsafe_allow_html=True,
@@ -1976,7 +2080,7 @@ def how_to_use_page():
         "<p class='prism-about-body'>"
         "Save indicator drafts in Step 5 if you need to navigate away. "
         "Negative values and statistical outliers (&gt;2 SD) are flagged for review before proceeding. "
-        "Run at least one validation check before finalising a recommendation. "
+        "Run at least one verification check before finalising a recommendation. "
         "Use Step 15 Decision support for a structured winner summary."
         "</p></div>",
         unsafe_allow_html=True,
@@ -2029,7 +2133,7 @@ def _render_excel_download_button(key_suffix=""):
             type="primary",
             use_container_width=True,
             key=key,
-            help="Export inputs, processing, rankings, validation, analytics, and decision support.",
+            help="Export inputs, processing, rankings, verification, analytics, and decision support.",
         )
     except Exception as e:
         st.error(f"Report error: {e}")
@@ -2216,7 +2320,7 @@ def build_excel_report():
     # ── Sheet 4: Category Scores ──────────────────────────────────────────────
     if hasattr(ss, "cat_scores") and ss.cat_scores:
         ws4 = wb.create_sheet("4. Category Scores")
-        add_title(ws4, "Category Scores (MEREC Weights × N2 Normalisation)")
+        add_title(ws4, "Category Scores (MEREC Weights × Linear-sum (N2) Normalisation)")
         headers = ["Category"] + names
         for ci, h in enumerate(headers, 1):
             ws4.cell(3, ci, h).font = HDR_FONT
@@ -2305,13 +2409,13 @@ def build_excel_report():
             style_body(ws7, ri, len(headers))
         auto_width(ws7)
 
-    # ── Sheet: Step 13 Validation ─────────────────────────────────────────────
+    # ── Sheet: Step 13 Verification ─────────────────────────────────────────────
     if mr:
         if not ss.get("validation_dashboard_results"):
             compute_sensitivity_dashboard(force=False)
         dashboard = ss.get("validation_dashboard_results")
-        ws13 = wb.create_sheet("13. Validation")
-        add_title(ws13, "Step 13 — Sensitivity validation dashboard")
+        ws13 = wb.create_sheet("13. Verification")
+        add_title(ws13, "Step 13 — Sensitivity verification dashboard")
         row_v = 3
         if dashboard:
             summary_rows = [
@@ -2343,7 +2447,7 @@ def build_excel_report():
                 ws13.cell(row_v, 1, "Summary").font = Font(name="Times New Roman", bold=True, size=10)
                 ws13.cell(row_v + 1, 1, dashboard["summary"]).font = BODY_FONT
         else:
-            ws13.cell(3, 1, "Validation dashboard not available.").font = BODY_FONT
+            ws13.cell(3, 1, "Verification dashboard not available.").font = BODY_FONT
         auto_width(ws13)
 
     # ── Sheet: Step 14 Analytics ──────────────────────────────────────────────
@@ -2425,7 +2529,7 @@ with st.sidebar:
         "Problem Definition": [1, 2, 3, 4, 5],
         "Indicator Processing": [6, 7, 8],
         "Decision Aggregation": [9, 10, 11, 12],
-        "Validation": [13],
+        "Verification": [13],
         "Analytics": [14],
         "Decision Support": [15],
     }
@@ -2541,9 +2645,9 @@ def landing_page():
     with c2:
         st.markdown(
             "<div class='prism-card'>"
-            "<span class='prism-step-pill'>Validation</span>"
+            "<span class='prism-step-pill'>Verification</span>"
             "<h4>Integrated robustness checks</h4>"
-            "<p>Eight validation modules covering weight sensitivity, power-mean spectrum, "
+            "<p>Eight verification modules covering weight sensitivity, power-mean spectrum, "
             "normalisation, Monte Carlo uncertainty, bootstrap stability, "
             "and indicator-level propagation.</p></div>",
             unsafe_allow_html=True,
@@ -2554,7 +2658,7 @@ def landing_page():
             "<span class='prism-step-pill'>Reporting</span>"
             "<h4>Audit-ready outputs</h4>"
             "<p>Download a full Excel workbook at Step 15 covering inputs, "
-            "weights, rankings, validation, and decision support for "
+            "weights, rankings, verification, and decision support for "
             "stakeholder communication.</p></div>",
             unsafe_allow_html=True,
         )
@@ -2608,7 +2712,7 @@ def landing_page():
         "<div class='prism-framework-flow'>"
         "<div class='prism-framework-box'>"
         "<strong>Inter-category weighting</strong>"
-        "<span class='sub'>Entropy, CRITIC</span></div>"
+        "<span class='sub'>Entropy, CRITIC, CILOS</span></div>"
         "<div class='prism-framework-arrow'>&#8594;</div>"
         "<div class='prism-framework-box'>"
         "<strong>Weight consolidation</strong>"
@@ -2649,7 +2753,7 @@ def landing_page():
         ("1", "Define", "Alternatives, categories, indicators"),
         ("2", "Process", "MEREC, N2, category scores"),
         ("3", "Aggregate", "GPM weights, MCDM, PSI ranking"),
-        ("4", "Validate", "Sensitivity and uncertainty analysis"),
+        ("4", "Verify", "Sensitivity and uncertainty analysis"),
         ("5", "Report & decide", "Decision support and Excel export"),
     ]
     for col, (num, lbl, sub) in zip([w1, w2, w3, w4, w5], workflow):
@@ -2687,7 +2791,7 @@ def landing_page():
         "<span class='prism-dimension-pill'>Productivity</span>"
         "</div>"
         "<p class='prism-about-body'>"
-        "An integrated validation and analytics layer provides robustness "
+        "An integrated verification and analytics layer provides robustness "
         "evidence to support rigorous, evidence-based decision-making."
         "</p>"
         "</div>",
@@ -3252,65 +3356,8 @@ def compute_level2():
 def step7():
     st.header("Step 7 - MEREC weights")
 
-    # ── Data-driven normalisation recommendation ──────────────────────────────
-    names_s7 = st.session_state.proc_names
-    n_proc_s7 = len(names_s7)
-    all_raw_s7 = []
-    has_zeros_s7 = False
-    for ckey_s7 in ordered_sel_cats():
-        ind_names_s7, _, benefits_s7 = get_full_indicators(ckey_s7)
-        for j in range(len(ind_names_s7)):
-            row_s7 = [st.session_state.indicator_values.get((ckey_s7,j,pi), 0.0)
-                      for pi in range(n_proc_s7)]
-            all_raw_s7.extend(row_s7)
-            if any(v == 0.0 for v in row_s7):
-                has_zeros_s7 = True
-
-    if all_raw_s7:
-        arr_s7    = np.array(all_raw_s7)
-        nz_s7     = arr_s7[arr_s7 > 0]
-        cv_s7     = float(np.std(nz_s7)/np.mean(nz_s7)) if len(nz_s7)>1 else 0.0
-        rng_r_s7  = float(nz_s7.max()/nz_s7.min()) if len(nz_s7)>1 else 1.0
-
-        if has_zeros_s7:
-            rec_title = "N2 (sum-based) — recommended"
-            rec_text  = ("Your data contains zero values. Min-max normalisation "
-                         "produces division by zero for cost indicators. "
-                         "N2 sum-based normalisation handles zeros correctly by "
-                         "using reciprocal transformation with a floor value.")
-            rec_col   = "green"
-        elif rng_r_s7 > 100:
-            rec_title = "N2 (sum-based) — recommended"
-            rec_text  = (f"Your data spans a large range (max/min ratio = {rng_r_s7:.0f}×). "
-                         "Min-max normalisation compresses small differences near the minimum. "
-                         "N2 sum-based normalisation preserves proportional differences "
-                         "between alternatives more faithfully.")
-            rec_col   = "green"
-        elif cv_s7 < 0.15:
-            rec_title = "Any normalisation — low sensitivity expected"
-            rec_text  = (f"Your indicator values show low variation (CV = {cv_s7:.2f}). "
-                         "All normalisation methods will produce similar results. "
-                         "N2 is the PRISM default. Run Validation Check 5 "
-                         "(normalisation sensitivity) to confirm.")
-            rec_col   = "blue"
-        else:
-            rec_title = "N2 (sum-based) — recommended"
-            rec_text  = (f"Standard dataset (CV = {cv_s7:.2f}, range ratio = {rng_r_s7:.1f}×). "
-                         "N2 sum-based normalisation is appropriate as the PRISM default. "
-                         "Verify with Validation Check 5 (normalisation sensitivity).")
-            rec_col   = "green"
-
-        bg_map  = {"green":"#E8F5E9","blue":"#E3F0FC"}
-        bd_map  = {"green":"#16A34A","blue":"#1565C0"}
-        tx_map  = {"green":"#1B5E20","blue":"#0D2B5E"}
-        st.markdown(
-            f'<div style="background:{bg_map[rec_col]};border-left:3px solid {bd_map[rec_col]};'
-            f'padding:8px 12px;border-radius:4px;margin:0 0 12px 0;'
-            f'font-family:Times New Roman,Tinos,serif;font-size:13px;color:{tx_map[rec_col]};">'
-            f'<b>Normalisation recommendation:</b> {rec_title}<br>'
-            f'<span style="font-size:12px;">{rec_text}</span></div>',
-            unsafe_allow_html=True,
-        )
+    st.caption("Category scores use linear sum-based (N2) normalisation as the baseline. "
+               "Its sensitivity to other normalisation methods is tested in Step 13, check 5.")
 
     for ckey in ordered_sel_cats():
         cat = CATS[ckey]
@@ -3470,10 +3517,11 @@ def step10():
     st.header("Step 10 - Category weighting methods")
 
     st.session_state.sel_weight_methods.discard("equal")
-    options = {"entropy": "Entropy weights", "critic": "CRITIC weights"}
+    options = {"entropy": "Entropy weights", "critic": "CRITIC weights", "cilos": "CILOS weights"}
     weight_help = {
         "entropy": FIELD_HELP["weight_entropy"],
         "critic": FIELD_HELP["weight_critic"],
+        "cilos": FIELD_HELP["weight_cilos"],
     }
     for key, label in options.items():
         checked = key in st.session_state.sel_weight_methods
@@ -3494,6 +3542,8 @@ def step10():
             sets.append(entropy_weights(mat)); labels.append("Entropy")
         if "critic" in st.session_state.sel_weight_methods:
             sets.append(critic_weights(mat)); labels.append("CRITIC")
+        if "cilos" in st.session_state.sel_weight_methods:
+            sets.append(cilos_weights(mat)); labels.append("CILOS")
 
         st.subheader("Generalised Power Mean Consolidation")
         if len(sets) > 1:
@@ -3516,10 +3566,10 @@ def step10():
             st.dataframe(pd.DataFrame(rows, columns=["Category"] + labels + case_labels),
                          use_container_width=True, hide_index=True)
             choice = st.selectbox(
-                "Consolidation carried forward to Step 12 and the validation checks",
+                "Consolidation carried forward to Step 12 and the verification checks",
                 case_labels, index=idx0, key="gpm_forward_select",
                 help="Step 12 compares all five cases. The case chosen here supplies the "
-                     "single weight vector used by the main results table and the validation checks.")
+                     "single weight vector used by the main results table and the verification checks.")
             sel_i = case_labels.index(choice)
             final_w = case_list[sel_i][1]
             st.session_state.gpm_forward_label = choice
@@ -3705,7 +3755,7 @@ def step12():
         mat_cat = np.array([cat_scores[c] for c in l3_cats])
         gsets = selected_weight_sets(mat_cat, st.session_state.sel_weight_methods)
         if len(gsets) < 2:
-            st.info("Select both Entropy and CRITIC in Step 10 to compare power-mean "
+            st.info("Select at least two weighting methods in Step 10 to compare power-mean "
                     "consolidation cases.")
         else:
             case_list = gpm_case_weights(gsets)
@@ -3790,12 +3840,12 @@ def step12():
                 _choice = st.selectbox(
                     "Power mean for weight consolidation", _case_labels, index=_idx,
                     key="combo_gpm_select",
-                    help="Entropy and CRITIC weights are re-derived inside every category "
+                    help="The selected weights (Entropy, CRITIC, CILOS) are re-derived inside every category "
                          "combination and consolidated with this power mean before the MCDM "
                          "methods and PSI are applied.")
                 combo_power = {lab: pp for pp, lab in GPM_CASES}[_choice]
         if combo_power is not None:
-            st.caption(f"Weights inside each combination: Entropy + CRITIC consolidated with {_choice}.")
+            st.caption(f"Weights inside each combination: the selected weighting methods consolidated with {_choice}.")
 
         combos = get_combinations(l3_cats)
         cat_initial = {c: CAT_SHORT.get(c, CATS[c]["label"][:1]) for c in l3_cats}
@@ -3940,7 +3990,7 @@ def step12():
             st.session_state.step = 11
             st.rerun()
     with c2:
-        if st.button("Validation (optional) ->"):
+        if st.button("Verification (optional) ->"):
             st.session_state.step = 13
             st.rerun()
     with c3:
@@ -3956,9 +4006,10 @@ def step12():
 
 
 # ============================================================================
-# STEP 13 - VALIDATION (optional)
+# STEP 13 - VERIFICATION (optional)
 # ============================================================================
 
+@with_gpm_picker("rr")
 def validation_rank_reversal():
     st.subheader("4. Rank-reversal test")
     
@@ -4098,7 +4149,7 @@ def validation_rank_reversal():
         )
 
         # Show GPM weight change table
-        w_full = st.session_state.final_cat_weights
+        w_full = current_final_weights()
         l3_cats_rr = ordered_l3_cats()
         rows_w = []
         for ci, ckey in enumerate(l3_cats_rr):
@@ -4125,6 +4176,7 @@ def validation_rank_reversal():
 
 
 
+@with_gpm_picker("norm")
 def validation_normalisation_sensitivity():
     st.subheader("5. Normalisation sensitivity")
     
@@ -4158,12 +4210,12 @@ def validation_normalisation_sensitivity():
     NORM_OPTIONS = {
         "Min-max": minmax_norm,
         "Vector": vector_norm,
-        "N2 (baseline)": n2_norm,
+        "Linear sum (baseline)": n2_norm,
     }
 
     alt_norm_label = st.selectbox(
         "Alternative normalisation method",
-        [k for k in NORM_OPTIONS if k != "N2 (baseline)"],
+        [k for k in NORM_OPTIONS if k != "Linear sum (baseline)"],
         key="norm_sens_select",
         help=FIELD_HELP["alt_norm"],
     )
@@ -4209,9 +4261,9 @@ def validation_normalisation_sensitivity():
     # --- Comparison table ---
     cols_table = ["Alternative"]
     for m in sel_mcdm_methods:
-        cols_table += [f"{METHOD_LABELS[m]} (N2 baseline)", f"{METHOD_LABELS[m]} ({alt_norm_label})"]
+        cols_table += [f"{METHOD_LABELS[m]} (linear-sum baseline)", f"{METHOD_LABELS[m]} ({alt_norm_label})"]
     if multi:
-        cols_table += [f"PSI Rank (N2, p={p_val:.2f})", f"PSI Rank ({alt_norm_label}, p={p_val:.2f})"]
+        cols_table += [f"PSI Rank (linear sum, p={p_val:.2f})", f"PSI Rank ({alt_norm_label}, p={p_val:.2f})"]
 
     rows_table = []
     reversal_found = False
@@ -4232,7 +4284,7 @@ def validation_normalisation_sensitivity():
         rows_table.append(row)
 
     st.markdown(
-        f"**Baseline normalisation:** N2  |  "
+        f"**Baseline normalisation:** Linear sum (N2)  |  "
         f"**Alternative:** {alt_norm_label}  |  p = {p_val:.2f}"
     )
     df_norm_export = pd.DataFrame(rows_table, columns=cols_table)
@@ -4241,7 +4293,7 @@ def validation_normalisation_sensitivity():
 
     if reversal_found:
         st.warning(
-            f"⚠️ Rank change detected: switching from N2 to {alt_norm_label} normalisation "
+            f"⚠️ Rank change detected: switching from linear-sum (N2) to {alt_norm_label} normalisation "
             "changes one or more rankings. The result has some sensitivity to normalisation choice."
         )
     else:
@@ -4250,12 +4302,13 @@ def validation_normalisation_sensitivity():
     
 
 
+@with_gpm_picker("boot")
 def validation_bootstrap_merec_rcw():
     st.subheader("6. Bootstrap stability analysis — MEREC and GPM")
 
     names    = st.session_state.proc_names
     l3_cats  = ordered_l3_cats()
-    final_w  = st.session_state.final_cat_weights
+    final_w  = current_final_weights()
     sel_wm   = st.session_state.sel_weight_methods
 
     c1, c2 = st.columns(2)
@@ -4581,9 +4634,10 @@ def _psi_percentile_ci(samples):
     return lo, hi, mn
 
 
+@with_gpm_picker("indunc")
 def validation_indicator_uncertainty():
     """
-    Validation Check 7 — Indicator-level uncertainty propagation.
+    Verification Check 7 — Indicator-level uncertainty propagation.
 
     Propagates ±% uncertainty in raw indicator values through the full
     PRISM pipeline (MEREC → N2 → CategoryScores → GPM → MCDM → PSI)
@@ -4865,14 +4919,16 @@ def _p_to_x(p):
 
 def compute_power_spectrum(mat, methods, psi_p=0.5, p_grid=None):
     """
-    Re-run the ranking with GPM weights built from Entropy + CRITIC using a power
+    Re-run the ranking with GPM weights built from the selected weighting methods using a power
     mean with exponent p, for p across the whole spectrum (-inf ... +inf).
 
     Returns dict with p_grid, labels, weights (n_p x k), ranks (n_alt x n_p)
     and p_fwd, the exponent of the consolidation carried forward from Step 10.
     """
     p_grid = list(POWER_P_GRID if p_grid is None else p_grid)
-    sets = [entropy_weights(mat), critic_weights(mat)]
+    sets = selected_weight_sets(mat, st.session_state.get("sel_weight_methods", set()))
+    if len(sets) < 2:
+        sets = [entropy_weights(mat), critic_weights(mat), cilos_weights(mat)]
 
     def _rank_for(w):
         weighted = mat * w[:, None]
@@ -4972,7 +5028,7 @@ def _assess_monte_carlo(winner_idx, l3_cats, cat_scores, methods, final_w, n_ite
     names = st.session_state.proc_names
     n_proc = len(names)
     mat = np.array([cat_scores[c] for c in l3_cats])
-    k_value, _, _ = compute_dirichlet_k(mat)
+    k_value, _, _, _ = compute_dirichlet_k(mat)
     alpha_scale = 1.0 + (k_value / 100.0) * 49.0
     alpha = np.maximum(final_w * alpha_scale, 0.05)
     rng = np.random.default_rng(42)
@@ -5101,7 +5157,7 @@ def _assess_normalisation(winner_idx, l3_cats, methods, method_ranks, sel_wm):
         alt_rank = int(ranks_alt[methods[0]][winner_idx])
 
     if alt_rank == base_rank:
-        status, detail = "green", "Winner rank unchanged when switching N2 to Min-max normalisation"
+        status, detail = "green", "Winner rank unchanged when switching from linear-sum (N2) to min-max normalisation"
     elif alt_rank <= 2 and base_rank == 1:
         status, detail = "amber", f"Winner rank shifts from {base_rank} to {alt_rank} under Min-max normalisation"
     else:
@@ -5202,7 +5258,7 @@ def _build_dashboard_summary(checks, winner_name):
         names = ", ".join(c["name"].lower() for c in partial)
         parts.append(f"It is partially sensitive to **{names}**.")
     else:
-        parts.append("No material sensitivity was detected across the validation suite.")
+        parts.append("No material sensitivity was detected across the verification suite.")
     return " ".join(parts)
 
 
@@ -5225,7 +5281,8 @@ def _overall_dashboard_status(checks):
 def _dashboard_iter_settings():
     """Iteration counts used by the Step 13 sensitivity dashboard."""
     return {
-        "v": 3,
+        "v": 5,
+        "gpm_p": _dash_gpm_p(),
         "bs_n_iter": int(st.session_state.get("dash_bs_n_iter", st.session_state.get("bs_n_iter", 500))),
         "bs_unc_pct": int(st.session_state.get("dash_bs_unc_pct", st.session_state.get("bs_unc_pct", 10))),
         "ind_n_iter": int(st.session_state.get("dash_ind_unc_iter", st.session_state.get("ind_unc_iter", 500))),
@@ -5234,6 +5291,15 @@ def _dashboard_iter_settings():
 
 
 def compute_sensitivity_dashboard(force=False):
+    prev = st.session_state.get("gpm_override_p")
+    st.session_state["gpm_override_p"] = _dash_gpm_p()
+    try:
+        return _compute_sensitivity_dashboard(force)
+    finally:
+        st.session_state["gpm_override_p"] = prev
+
+
+def _compute_sensitivity_dashboard(force=False):
     cache_key = "validation_dashboard_results"
     settings = _dashboard_iter_settings()
     cached = st.session_state.get(cache_key)
@@ -5246,7 +5312,7 @@ def compute_sensitivity_dashboard(force=False):
     l3_cats = ordered_l3_cats()
     cat_scores = st.session_state.cat_scores
     sel_wm = st.session_state.sel_weight_methods
-    final_w = st.session_state.final_cat_weights
+    final_w = current_final_weights()
 
     winner_info = _resolve_overall_winner(names, method_ranks, methods)
     wi = winner_info["winner_idx"]
@@ -5288,11 +5354,11 @@ def compute_sensitivity_dashboard(force=False):
 
 
 def validation_intro():
-    st.header("Step 13 - Validation (optional)")
+    st.header("Step 13 - Verification (optional)")
 
     method_ranks = st.session_state.get("last_method_ranks")
     if not method_ranks:
-        st.warning("Complete Step 12 first to generate rankings before running validation.")
+        st.warning("Complete Step 12 first to generate rankings before running verification.")
         st.divider()
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -5312,7 +5378,7 @@ def validation_intro():
         force = st.button("Refresh dashboard", type="primary", key="val_dash_refresh")
     with c_info:
         st.caption(
-            "All eight validation checks run automatically and focus on the "
+            "All eight verification checks run automatically and focus on the "
             "recommended winner from Step 12."
         )
 
@@ -5351,6 +5417,7 @@ def validation_intro():
             help="Indicator noise range for dashboard uncertainty check.",
         )
 
+    gpm_picker("dash", "Power mean for the dashboard checks")
     with st.spinner("Running sensitivity dashboard..."):
         dashboard = compute_sensitivity_dashboard(force=force)
 
@@ -5379,7 +5446,7 @@ def validation_intro():
     ]
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-    st.markdown("##### Detailed validation views")
+    st.markdown("##### Detailed verification views")
     with st.expander("1. Weighting-method sensitivity"):
         validation_weight_sensitivity()
     with st.expander("2. Benefit/Cost indicator sensitivity"):
@@ -5411,6 +5478,7 @@ def validation_intro():
         _reset_with_confirmation("val_footer")
 
 
+@with_gpm_picker("wsens")
 def validation_weight_sensitivity():
     st.subheader("1. Weighting-method sensitivity")
 
@@ -5456,15 +5524,16 @@ def validation_weight_sensitivity():
     st.divider()
     st.markdown("**Overall ranking across category combinations (this weighting scheme set)**")
 
-    wm_options = {"entropy": "Entropy", "critic": "CRITIC"}
+    wm_options = {"entropy": "Entropy", "critic": "CRITIC", "cilos": "CILOS"}
     sens1_weight_help = {
         "entropy": FIELD_HELP["weight_entropy"],
         "critic": FIELD_HELP["weight_critic"],
+        "cilos": FIELD_HELP["weight_cilos"],
     }
     if "sens1_wm" not in st.session_state:
-        st.session_state.sens1_wm = (set(st.session_state.sel_weight_methods) - {"equal"}) or {"entropy", "critic"}
+        st.session_state.sens1_wm = (set(st.session_state.sel_weight_methods) - {"equal"}) or {"entropy", "critic", "cilos"}
     st.session_state.sens1_wm.discard("equal")
-    cols = st.columns(2)
+    cols = st.columns(3)
     for i, (k, lbl) in enumerate(wm_options.items()):
         with cols[i]:
             checked = k in st.session_state.sens1_wm
@@ -5475,7 +5544,7 @@ def validation_weight_sensitivity():
             else:
                 st.session_state.sens1_wm.discard(k)
     if not st.session_state.sens1_wm:
-        st.session_state.sens1_wm = {"entropy", "critic"}
+        st.session_state.sens1_wm = {"entropy", "critic", "cilos"}
 
     sens1_p = st.slider("p for combination view", min_value=0.0, max_value=1.0,
                          value=0.5, step=0.01, key="sens1_p_slider",
@@ -5555,7 +5624,7 @@ def validation_weight_sensitivity():
 def validation_power_spectrum():
     st.subheader("8. Power-mean spectrum sensitivity")
     st.caption(
-        "GPM combines Entropy and CRITIC with a power mean of exponent p. Here p is swept "
+        "GPM combines the selected weighting methods (Entropy, CRITIC, CILOS) with a power mean of exponent p. Here p is swept "
         "from -inf (minimum) through -1 (harmonic), 0 (geometric) and +1 (arithmetic) to +inf "
         "(maximum), and the full MCDM + PSI ranking is recomputed at every p. "
         "The dashed line marks the consolidation carried forward from Step 10."
@@ -5596,7 +5665,7 @@ def validation_power_spectrum():
             '<div style="background:#E8F5E9;border-left:3px solid #16A34A;padding:8px 12px;'
             'border-radius:4px;margin:6px 0;font-family:Times New Roman,serif;color:#1B5E20;'
             'font-size:13px;">No rank changes anywhere on the power-mean spectrum. '
-            'The ranking is independent of how Entropy and CRITIC are consolidated.</div>',
+            'The ranking is independent of how the weighting methods are consolidated.</div>',
             unsafe_allow_html=True)
     else:
         msg = ("Rank variation detected: " + ", ".join(changed) + ".")
@@ -5669,6 +5738,7 @@ def validation_power_spectrum():
         st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
 
 
+@with_gpm_picker("bc")
 def validation_bc_sensitivity():
     st.subheader("2. Benefit/Cost indicator sensitivity")
 
@@ -5812,6 +5882,7 @@ def validation_bc_sensitivity():
                  hide_index=True)
 
 
+@with_gpm_picker("mc")
 def validation_monte_carlo():
     st.subheader("3. Monte Carlo uncertainty (Dirichlet)")
 
@@ -5819,11 +5890,11 @@ def validation_monte_carlo():
     names = st.session_state.proc_names
     n_proc = len(names)
     cat_scores = st.session_state.cat_scores
-    final_w = st.session_state.final_cat_weights
+    final_w = current_final_weights()
     sel_mcdm_methods = list(st.session_state.sel_mcdm_methods) or ALL_MCDM_KEYS
 
     mat = np.array([cat_scores[c] for c in l3_cats])
-    k_value, w_en, w_cr = compute_dirichlet_k(mat)
+    k_value, w_en, w_cr, w_ci = compute_dirichlet_k(mat)
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -5840,9 +5911,9 @@ def validation_monte_carlo():
                            value=0.5, step=0.01, key="mc_p_slider",
                            help=FIELD_HELP["psi_p"])
 
-    with st.expander("Show Entropy/CRITIC weights used to compute k"):
+    with st.expander("Show Entropy/CRITIC/CILOS weights used to compute k"):
         wdf = pd.DataFrame(
-            [w_en, w_cr], index=["Entropy", "CRITIC"],
+            [w_en, w_cr, w_ci], index=["Entropy", "CRITIC", "CILOS"],
             columns=[CATS[c]["label"] for c in l3_cats],
         ).round(4)
         st.dataframe(wdf, use_container_width=True)
@@ -5920,6 +5991,7 @@ def validation_monte_carlo():
 
 
 
+@with_gpm_picker("acw")
 def analytics_category_weighted_contribution():
     """
     Category contribution to weighted MCDM input analysis.
@@ -5938,7 +6010,7 @@ def analytics_category_weighted_contribution():
     n_proc    = len(names)
     l3_cats   = ordered_l3_cats()
     cat_scores = st.session_state.cat_scores
-    final_w   = st.session_state.final_cat_weights
+    final_w   = current_final_weights()
     method_ranks = st.session_state.get("last_method_ranks", {})
     sel_mcdm  = list(st.session_state.sel_mcdm_methods) or ALL_MCDM_KEYS
     multi     = len(sel_mcdm) > 1
@@ -6017,6 +6089,7 @@ def analytics_category_weighted_contribution():
         st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
 
 
+@with_gpm_picker("acomb")
 def analytics_combined_contribution():
     """
     Combined contribution analysis — nested donut per process.
@@ -6034,7 +6107,7 @@ def analytics_combined_contribution():
     l3_cats  = ordered_l3_cats()
     n2_data  = st.session_state.n2_data
     merec_w  = st.session_state.merec_w
-    final_w  = st.session_state.final_cat_weights
+    final_w  = current_final_weights()
     method_ranks = st.session_state.get("last_method_ranks", {})
     sel_mcdm = list(st.session_state.sel_mcdm_methods) or ALL_MCDM_KEYS
     multi    = len(sel_mcdm) > 1
@@ -6304,6 +6377,7 @@ def analytics_combined_contribution():
 
 
 
+@with_gpm_picker("aloo")
 def analytics_leave_one_out():
     st.subheader("B. Leave-one-out category analysis")
     
@@ -6434,7 +6508,7 @@ def analytics_indicator_contribution():
     l3_cats  = ordered_l3_cats()
     n2_data  = st.session_state.n2_data
     merec_w  = st.session_state.merec_w
-    final_w  = st.session_state.final_cat_weights
+    final_w  = current_final_weights()
     method_ranks = st.session_state.get("last_method_ranks", {})
     sel_mcdm = list(st.session_state.sel_mcdm_methods) or ALL_MCDM_KEYS
     multi    = len(sel_mcdm) > 1
@@ -6657,6 +6731,7 @@ def analytics_indicator_contribution():
             st.write("")
 
 
+@with_gpm_picker("ailoo")
 def analytics_indicator_loo():
     st.subheader("B. Leave-one-out indicator analysis")
     
@@ -6781,6 +6856,7 @@ def analytics_indicator_intro():
 
 
 
+@with_gpm_picker("astake")
 def analytics_stakeholder_preference():
     st.subheader("3. Stakeholder preference simulation")
     
@@ -6790,7 +6866,7 @@ def analytics_stakeholder_preference():
     cat_scores = st.session_state.cat_scores
     sel_mcdm_methods = list(st.session_state.sel_mcdm_methods) or ALL_MCDM_KEYS
     method_ranks = st.session_state.get("last_method_ranks", {})
-    final_w = st.session_state.final_cat_weights
+    final_w = current_final_weights()
     multi = len(sel_mcdm_methods) > 1
 
     cat_labels = [CATS[c]["label"] for c in l3_cats]
@@ -7000,7 +7076,7 @@ def auxiliary_intro():
     st.divider()
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        if st.button("<- Back to validation"):
+        if st.button("<- Back to verification"):
             st.session_state.step = 13
             st.rerun()
     with c2:
@@ -7046,7 +7122,7 @@ def step15():
         st.dataframe(pd.DataFrame(strengths), use_container_width=True, hide_index=True)
     else:
         st.info(
-            "No clear strength signals yet. Run Step 13 validation, select multiple "
+            "No clear strength signals yet. Run Step 13 verification, select multiple "
             "MCDM methods in Step 11, or review category-combination sensitivity in Step 12."
         )
 
@@ -7056,7 +7132,7 @@ def step15():
     else:
         st.info(
             "No material weaknesses detected. This may indicate a robust winner — "
-            "confirm with Step 13 validation before finalising your recommendation."
+            "confirm with Step 13 verification before finalising your recommendation."
         )
 
     st.subheader("Category score profile")
@@ -7066,7 +7142,7 @@ def step15():
     st.subheader("Full assessment report")
     st.caption(
         "Download a single Excel workbook with data from all workflow steps "
-        "(inputs, processing, results, validation, analytics, and decision support)."
+        "(inputs, processing, results, verification, analytics, and decision support)."
     )
     _render_excel_download_button(key_suffix="step15")
 
@@ -7077,7 +7153,7 @@ def step15():
             st.session_state.step = 12
             st.rerun()
     with c2:
-        if st.button("<- Back to validation", key="ds_back_validation"):
+        if st.button("<- Back to verification", key="ds_back_verification"):
             st.session_state.step = 13
             st.rerun()
     with c3:
