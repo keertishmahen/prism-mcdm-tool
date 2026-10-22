@@ -891,7 +891,7 @@ apply_mpl_style()
 def mpl_show(fig):
     """Display matplotlib figure in Streamlit and close it."""
     apply_mpl_style()
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
 
@@ -2165,7 +2165,7 @@ def _render_excel_download_button(key_suffix=""):
             file_name=fname,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key=key,
             help="Export inputs, processing, rankings, verification, analytics, and decision support.",
         )
@@ -2837,16 +2837,16 @@ def landing_page():
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         if st.button("Begin assessment", type="primary",
-                     use_container_width=True, key="start_btn"):
+                     width="stretch", key="start_btn"):
             st.session_state.step = 1
             st.rerun()
     doc1, doc2 = st.columns(2)
     with doc1:
-        if st.button("How to use", use_container_width=True, key="landing_how_to_use"):
+        if st.button("How to use", width="stretch", key="landing_how_to_use"):
             st.session_state.step = -1
             st.rerun()
     with doc2:
-        if st.button("Method descriptions", use_container_width=True, key="landing_method_desc"):
+        if st.button("Method descriptions", width="stretch", key="landing_method_desc"):
             st.session_state.step = -2
             st.rerun()
 
@@ -3152,7 +3152,7 @@ def step5():
         edited = st.data_editor(
             st.session_state[seed_key],
             key=editor_key,
-            use_container_width=True,
+            width="stretch",
             column_config=col_cfg,
         )
 
@@ -3177,7 +3177,7 @@ def step5():
             )
             st.dataframe(
                 pd.DataFrame(negatives),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -3196,7 +3196,7 @@ def step5():
         )
         st.dataframe(
             pd.DataFrame(outliers),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         ack = st.checkbox(
@@ -3311,7 +3311,7 @@ def step6():
 
         df_corr = pd.DataFrame(corr_mat, index=ind_names, columns=ind_names).round(3)
 
-        st.dataframe(df_corr, use_container_width=True)
+        st.dataframe(df_corr, width="stretch")
 
         pairs_flagged = []
         for a in range(n_ind):
@@ -3406,7 +3406,7 @@ def step7():
 
         rows = [[ind, round(w[j], 4)] for j, ind in enumerate(ind_names)]
         st.dataframe(pd.DataFrame(rows, columns=["Indicator", "MEREC weight"]),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
         st.write("")
 
     st.divider()
@@ -3491,7 +3491,7 @@ def step8():
     else:
         st.plotly_chart(
             _step8_category_radar_figure(names, cat_keys, cat_scores),
-            use_container_width=True,
+            width="stretch",
         )
 
     score_rows = []
@@ -3500,7 +3500,7 @@ def step8():
         for ckey in cat_keys:
             row[CATS[ckey]["label"]] = round(float(cat_scores[ckey][pi]), 4)
         score_rows.append(row)
-    st.dataframe(pd.DataFrame(score_rows), use_container_width=True,
+    st.dataframe(pd.DataFrame(score_rows), width="stretch",
                  hide_index=True)
 
     st.divider()
@@ -3596,7 +3596,7 @@ def step10():
                 row += [round(float(w_case[i]), 4) for _, w_case in case_list]
                 rows.append(row)
             st.dataframe(pd.DataFrame(rows, columns=["Category"] + labels + case_labels),
-                         use_container_width=True, hide_index=True)
+                         width="stretch", hide_index=True)
             choice = st.selectbox(
                 "Consolidation carried forward to Step 12 and the verification checks",
                 case_labels, index=idx0, key="gpm_forward_select",
@@ -3614,7 +3614,7 @@ def step10():
             for i, ckey in enumerate(l3_cats):
                 rows.append([CATS[ckey]["label"], round(float(sets[0][i]), 4), round(float(final_w[i]), 4)])
             st.dataframe(pd.DataFrame(rows, columns=["Category"] + labels + ["Final"]),
-                         use_container_width=True, hide_index=True)
+                         width="stretch", hide_index=True)
             st.caption("Only one weighting method selected - no consolidation applied.")
         st.session_state.final_cat_weights = final_w
 
@@ -3751,7 +3751,7 @@ def step12():
             row.append(int(psi_rank_05[pi]))
         rows.append(row)
 
-    st.dataframe(pd.DataFrame(rows, columns=cols), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows, columns=cols), width="stretch", hide_index=True)
 
     if not multi:
         st.info("The PSI dot plot needs at least two MCDM methods. Select more in Step 11.")
@@ -3836,7 +3836,7 @@ def step12():
                 plot_bgcolor="white", paper_bgcolor="white",
                 font=dict(family="Times New Roman, Tinos, serif", size=13),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             st.caption("Bold row = consolidation carried forward from Step 10 (used in the table above).")
 
             hdrs = [h for h, _ in case_list]
@@ -3844,13 +3844,13 @@ def step12():
                 {"Alternative": names, **{h: [int(r) for r in case_rank[ci]]
                                          for ci, h in enumerate(hdrs)}})
             st.markdown("**PSI rank under each consolidation case**")
-            st.dataframe(rank_df, use_container_width=True, hide_index=True)
+            st.dataframe(rank_df, width="stretch", hide_index=True)
             with st.expander("PSI scores and MCDM ranks under each case"):
                 psi_df = pd.DataFrame(
                     {"Alternative": names, **{h: [round(float(v), 4) for v in case_psi[ci]]
                                              for ci, h in enumerate(hdrs)}})
                 st.markdown("PSI scores")
-                st.dataframe(psi_df, use_container_width=True, hide_index=True)
+                st.dataframe(psi_df, width="stretch", hide_index=True)
                 mr_rows = []
                 for ci, h in enumerate(hdrs):
                     for m in methods:
@@ -3859,7 +3859,7 @@ def step12():
                             row[name] = int(case_mr[ci][m][pi])
                         mr_rows.append(row)
                 st.markdown("MCDM ranks")
-                st.dataframe(pd.DataFrame(mr_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(mr_rows), width="stretch", hide_index=True)
 
         st.divider()
         st.subheader("Ranking across category combinations")
@@ -3960,7 +3960,7 @@ def step12():
             font=dict(family="Times New Roman", color="#0D2B5E"),
             hoverlabel=dict(font_family="Times New Roman"),
         )
-        st.plotly_chart(fig_combo, use_container_width=True)
+        st.plotly_chart(fig_combo, width="stretch")
 
         n_combos_total = len(combos)
 
@@ -4165,7 +4165,7 @@ def validation_rank_reversal():
         f"**Excluded:** {', '.join(excluded)}  |  "
         f"**Remaining:** {', '.join(keep_names)}  |  p = {p_val:.2f}"
     )
-    st.dataframe(df_compare, use_container_width=True, hide_index=True)
+    st.dataframe(df_compare, width="stretch", hide_index=True)
 
     if reversal_found:
         st.markdown(
@@ -4199,7 +4199,7 @@ def validation_rank_reversal():
                 "GPM weight (after exclusion)":  round(float(w_cat_pert[ci]), 4),
                 "Δ Change": f"{float(w_cat_pert[ci]-w_full[ci]):+.4f}",
             })
-        st.dataframe(pd.DataFrame(rows_w), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows_w), width="stretch", hide_index=True)
         st.caption(
             "Categories with the largest Δ Change drove the rank reversal. "
             "This is expected behaviour of objective weighting — weights are "
@@ -4329,7 +4329,7 @@ def validation_normalisation_sensitivity():
     )
     df_norm_export = pd.DataFrame(rows_table, columns=cols_table)
     st.session_state["export_norm_sens"] = {"alt_norm": alt_norm_label, "df": df_norm_export}
-    st.dataframe(df_norm_export, use_container_width=True, hide_index=True)
+    st.dataframe(df_norm_export, width="stretch", hide_index=True)
 
     if reversal_found:
         st.warning(
@@ -4342,13 +4342,67 @@ def validation_normalisation_sensitivity():
     
 
 
+def _verification_signature(*extra):
+    """Snapshot of every input a stored verification result depends on."""
+    ss = st.session_state
+    return (
+        _indicator_values_fingerprint(),
+        tuple(ss.proc_names),
+        tuple(ordered_l3_cats()),
+        tuple(sorted(ss.get("disabled_indicators", ()))),
+        repr(ss.get("custom_indicators", {})),
+        tuple(sorted(ss.sel_weight_methods)),
+        tuple(sorted(ss.sel_mcdm_methods)),
+        ss.get("gpm_override_p"),
+    ) + extra
+
+
+def _ci_chart(labels, lo, hi, obs, mean, *, value_label, ci_color, obs_color,
+              obs_name="Observed", obs_symbol="diamond", mean_symbol="circle",
+              horizontal=False, height=340):
+    """Plotly 95% CI chart: CI bar plus bootstrap-mean and observed markers."""
+    labels = list(labels)
+    lo = np.asarray(lo, dtype=float)
+    hi = np.asarray(hi, dtype=float)
+    cat_ax, val_ax = ("y", "x") if horizontal else ("x", "y")
+
+    def xy(vals):
+        return {cat_ax: labels, val_ax: list(vals)}
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        **xy(hi - lo), base=lo, orientation="h" if horizontal else "v", width=0.5,
+        name="95% CI", marker=dict(color=ci_color, opacity=0.3, line=dict(width=0)),
+        customdata=np.column_stack([lo, hi]),
+        hovertemplate=f"%{{{cat_ax}}}<br>95% CI %{{customdata[0]:.4f}} – %{{customdata[1]:.4f}}"
+                      "<extra></extra>"))
+    for vals, name, color, symbol, size in ((mean, "Bootstrap mean", "#0D2B5E", mean_symbol, 9),
+                                            (obs, obs_name, obs_color, obs_symbol, 12)):
+        fig.add_trace(go.Scatter(
+            **xy(vals), mode="markers", name=name,
+            marker=dict(color=color, symbol=symbol, size=size, line=dict(color="white", width=1)),
+            hovertemplate=f"%{{{cat_ax}}}<br>{name} %{{{val_ax}:.4f}}<extra></extra>"))
+    val_axis = dict(title=value_label, showgrid=True, gridcolor="#E5E7EB", zeroline=False)
+    if horizontal:
+        fig.update_xaxes(**val_axis)
+        fig.update_yaxes(showgrid=False, automargin=True,
+                         categoryorder="array", categoryarray=labels[::-1])
+    else:
+        fig.update_yaxes(**val_axis)
+        fig.update_xaxes(showgrid=False, automargin=True, tickangle=-20)
+    fig.update_layout(
+        height=height, margin=dict(l=20, r=20, t=50, b=40),
+        plot_bgcolor="white", paper_bgcolor="white",
+        font=dict(family="Times New Roman, Tinos, serif", size=13),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
+    return fig
+
+
 @with_gpm_picker("boot")
 def validation_bootstrap_merec_rcw():
     st.subheader("6. Bootstrap stability analysis — MEREC and GPM")
 
     l3_cats  = ordered_l3_cats()
-    final_w  = current_final_weights()
-    sel_wm   = st.session_state.sel_weight_methods
 
     c1, c2 = st.columns(2)
     with c1:
@@ -4366,16 +4420,31 @@ def validation_bootstrap_merec_rcw():
             help=FIELD_HELP["n_iter"],
         )
 
-    if not st.button("Run bootstrap", type="primary", key="bs_run"):
+    sig = _verification_signature()
+    if st.button("Run bootstrap", type="primary", key="bs_run"):
+        # Dashboard sliders own these keys and are already drawn this run; apply on next rerun.
+        st.session_state["_dash_pending"] = {**st.session_state.get("_dash_pending", {}),
+                                             "dash_bs_n_iter": int(n_iter),
+                                             "dash_bs_unc_pct": int(unc_pct)}
+        st.session_state.pop("validation_dashboard_results", None)
+        st.session_state["bs_results"] = {"sig": sig,
+                                          **_compute_bootstrap(l3_cats, int(unc_pct), int(n_iter))}
+
+    res = st.session_state.get("bs_results")
+    if res is None:
         st.info("Set parameters above and click Run bootstrap.")
         return
+    if res["sig"] != sig:
+        st.info("Inputs have changed since the last bootstrap run. "
+                "Click Run bootstrap to update the results.")
+        return
+    st.caption(f"Results from the last run: ±{res['unc_pct']}% uncertainty, "
+               f"{res['n_iter']} iterations. Change the settings and click Run bootstrap to update.")
+    _render_bootstrap_results(res)
 
-    # Dashboard sliders own these keys and are already drawn this run; apply on next rerun.
-    st.session_state["_dash_pending"] = {**st.session_state.get("_dash_pending", {}),
-                                         "dash_bs_n_iter": int(n_iter),
-                                         "dash_bs_unc_pct": int(unc_pct)}
-    st.session_state.pop("validation_dashboard_results", None)
 
+def _compute_bootstrap(l3_cats, unc_pct, n_iter):
+    sel_wm = st.session_state.sel_weight_methods
     rng = np.random.default_rng(42)
     progress = st.progress(0, text="Running bootstrap...")
 
@@ -4425,6 +4494,31 @@ def validation_bootstrap_merec_rcw():
 
     progress.empty()
 
+    rcw_arr = np.array(rcw_boot)  # (n_iter, n_cats)
+    final_w = np.asarray(current_final_weights(), dtype=float)
+    cat_labels = [CATS[c]["label"] for c in l3_cats]
+    obs_order = [cat_labels[i] for i in np.argsort(-final_w)]
+    order_stable = sum([cat_labels[i] for i in np.argsort(-w)] == obs_order for w in rcw_arr)
+    pct_stable = order_stable / n_iter * 100
+
+    st.session_state["export_bootstrap"] = {
+        "unc_pct": unc_pct, "n_iter": n_iter,
+        "merec_boot": merec_boot, "rcw_boot": rcw_arr,
+        "pct_stable": pct_stable,
+    }
+    return {
+        "l3_cats": list(l3_cats), "unc_pct": unc_pct, "n_iter": n_iter,
+        "merec_boot": {c: np.array(v) for c, v in merec_boot.items()},
+        "merec_obs": {c: np.array(st.session_state.merec_w[c], dtype=float) for c in l3_cats},
+        "rcw_arr": rcw_arr, "final_w": final_w,
+        "obs_order": obs_order, "pct_stable": pct_stable,
+    }
+
+
+def _render_bootstrap_results(res):
+    l3_cats, unc_pct, n_iter = res["l3_cats"], res["unc_pct"], res["n_iter"]
+    rcw_arr, final_w = res["rcw_arr"], res["final_w"]
+
     # ── MEREC results ─────────────────────────────────────────────────────────
     st.markdown("### MEREC Weight Stability")
     st.markdown(
@@ -4437,8 +4531,8 @@ def validation_bootstrap_merec_rcw():
     for ckey in l3_cats:
         cat = CATS[ckey]
         ind_names, ind_units, _ = get_full_indicators(ckey)
-        boot_arr = np.array(merec_boot[ckey])  # (n_iter, n_ind)
-        observed = st.session_state.merec_w[ckey]
+        boot_arr = res["merec_boot"][ckey]  # (n_iter, n_ind)
+        observed = res["merec_obs"][ckey]
 
         st.markdown(
             f"<span style='background:{cat['bg']};color:{cat['color']};"
@@ -4470,38 +4564,15 @@ def validation_bootstrap_merec_rcw():
                 "Stable?": "✅ Yes" if stable else "⚠️ No",
             })
 
-        st.dataframe(pd.DataFrame(rows_m), use_container_width=True,
+        st.dataframe(pd.DataFrame(rows_m), width="stretch",
                      hide_index=True)
 
-        # Matplotlib CI chart
-        apply_mpl_style()
-        n_ind = len(ind_names)
-        short_names = [f"{ind_names[j][:12]}" for j in range(n_ind)]
-        obs_vals = [float(observed[j]) for j in range(n_ind)]
-        lo_vals  = [float(np.percentile(boot_arr[:, j], 2.5)) for j in range(n_ind)]
-        hi_vals  = [float(np.percentile(boot_arr[:, j], 97.5)) for j in range(n_ind)]
-        means    = [float(boot_arr[:, j].mean()) for j in range(n_ind)]
-
-        fig, ax = plt.subplots(figsize=(max(5, n_ind * 1.2), 2.8))
-        x = np.arange(n_ind)
-        # CI bars
-        ax.bar(x, [h - l for h, l in zip(hi_vals, lo_vals)],
-               bottom=lo_vals, color=cat["color"], alpha=0.3,
-               width=0.5, label="95% CI", edgecolor="none")
-        # Observed
-        ax.scatter(x, obs_vals, color=cat["color"], zorder=5,
-                   s=60, label="Observed", marker="D")
-        # Bootstrap mean
-        ax.scatter(x, means, color="#0D2B5E", zorder=4,
-                   s=30, label="Bootstrap mean", marker="o")
-        ax.set_xticks(x)
-        ax.set_xticklabels(short_names, rotation=20, ha="right", fontsize=8)
-        ax.set_ylabel("MEREC weight", fontsize=9)
-        ax.legend(fontsize=8, frameon=False,
-                  loc="upper center", bbox_to_anchor=(0.5, 1.18), ncol=3)
-        ax.tick_params(labelsize=8)
-        plt.tight_layout()
-        mpl_show(fig)
+        st.plotly_chart(_ci_chart(
+            ind_names,
+            np.percentile(boot_arr, 2.5, axis=0), np.percentile(boot_arr, 97.5, axis=0),
+            observed, boot_arr.mean(axis=0),
+            value_label="MEREC weight", ci_color=cat["color"], obs_color=cat["color"],
+        ), width="stretch", key=f"bs_merec_chart_{ckey}")
 
         if all_stable:
             st.markdown(
@@ -4525,9 +4596,6 @@ def validation_bootstrap_merec_rcw():
     # ── GPM results ───────────────────────────────────────────────────────────
     st.markdown("### GPM Weight Stability")
 
-    rcw_arr = np.array(rcw_boot)  # (n_iter, n_cats)
-    cat_labels = [CATS[c]["label"] for c in l3_cats]
-
     rows_r = []
     all_stable_rcw = True
     for ci, ckey in enumerate(l3_cats):
@@ -4549,55 +4617,19 @@ def validation_bootstrap_merec_rcw():
             "Stable?": "✅ Yes" if stable else "⚠️ No",
         })
 
-    st.dataframe(pd.DataFrame(rows_r), use_container_width=True,
+    st.dataframe(pd.DataFrame(rows_r), width="stretch",
                  hide_index=True)
 
-    # GPM CI chart
-    apply_mpl_style()
-    n_cats = len(l3_cats)
-    obs_r  = [float(final_w[ci]) for ci in range(n_cats)]
-    lo_r   = [float(np.percentile(rcw_arr[:, ci], 2.5)) for ci in range(n_cats)]
-    hi_r   = [float(np.percentile(rcw_arr[:, ci], 97.5)) for ci in range(n_cats)]
-    mn_r   = [float(rcw_arr[:, ci].mean()) for ci in range(n_cats)]
     colors = [CATS[c]["color"] for c in l3_cats]
+    st.plotly_chart(_ci_chart(
+        [CATS[c]["label"] for c in l3_cats],
+        np.percentile(rcw_arr, 2.5, axis=0), np.percentile(rcw_arr, 97.5, axis=0),
+        final_w, rcw_arr.mean(axis=0),
+        value_label="GPM weight", ci_color=colors, obs_color=colors,
+    ), width="stretch", key="bs_gpm_chart")
 
-    fig, ax = plt.subplots(figsize=(max(5, n_cats * 1.4), 3.2))
-    x = np.arange(n_cats)
-    for ci in range(n_cats):
-        ax.bar(ci, hi_r[ci] - lo_r[ci], bottom=lo_r[ci],
-               color=colors[ci], alpha=0.3, width=0.5, edgecolor="none")
-        ax.scatter(ci, obs_r[ci], color=colors[ci], zorder=5,
-                   s=70, marker="D")
-        ax.scatter(ci, mn_r[ci], color="#0D2B5E", zorder=4,
-                   s=35, marker="o")
-    ax.set_xticks(x)
-    ax.set_xticklabels([CATS[c]["label"][:6] for c in l3_cats],
-                       rotation=20, ha="right", fontsize=9)
-    ax.set_ylabel("GPM weight", fontsize=10)
-    from matplotlib.lines import Line2D
-    legend_elements = [
-        Line2D([0],[0], marker="D", color="grey", markersize=7,
-               linestyle="none", label="Observed"),
-        Line2D([0],[0], marker="o", color="#0D2B5E", markersize=5,
-               linestyle="none", label="Bootstrap mean"),
-        plt.Rectangle((0,0),1,1, facecolor="grey", alpha=0.3, label="95% CI"),
-    ]
-    ax.legend(handles=legend_elements, fontsize=8, frameon=False,
-              loc="upper center", bbox_to_anchor=(0.5, 1.14), ncol=3)
-    ax.tick_params(labelsize=9)
-    plt.tight_layout()
-    mpl_show(fig)
-
-    # Weight order stability
     st.markdown("**Weight ordering stability**")
-    obs_order   = [cat_labels[i] for i in np.argsort(-np.array(obs_r))]
-    order_stable = 0
-    for b in range(n_iter):
-        boot_order = [cat_labels[i]
-                      for i in np.argsort(-rcw_arr[b])]
-        if boot_order == obs_order:
-            order_stable += 1
-    pct_stable = order_stable / n_iter * 100
+    obs_order, pct_stable = res["obs_order"], res["pct_stable"]
 
     if all_stable_rcw:
         st.markdown(
@@ -4619,13 +4651,6 @@ def validation_bootstrap_merec_rcw():
             f'{pct_stable:.1f}% of bootstrap iterations.</div>',
             unsafe_allow_html=True,
         )
-
-    # Store for export
-    st.session_state["export_bootstrap"] = {
-        "unc_pct": unc_pct, "n_iter": n_iter,
-        "merec_boot": merec_boot, "rcw_boot": rcw_arr,
-        "pct_stable": pct_stable,
-    }
 
 
 def _indicator_uncertainty_psi(l3_cats, sel_wm, sel_mcdm, multi, p_psi, rng=None,
@@ -4717,19 +4742,37 @@ def validation_indicator_uncertainty():
         help=FIELD_HELP["psi_p"],
     )
 
-    if not st.button("Run uncertainty propagation", type="primary",
-                     key="ind_unc_run"):
+    sig = _verification_signature()
+    if st.button("Run uncertainty propagation", type="primary", key="ind_unc_run"):
+        st.session_state["_dash_pending"] = {**st.session_state.get("_dash_pending", {}),
+                                             "dash_ind_unc_iter": int(n_iter),
+                                             "dash_ind_unc_pct": int(unc_pct)}
+        st.session_state.pop("validation_dashboard_results", None)
+        st.session_state["ind_unc_results"] = {
+            "sig": sig,
+            **_compute_indicator_uncertainty(l3_cats, sel_wm, sel_mcdm, multi, float(p_psi),
+                                             int(unc_pct), int(n_iter), n_proc),
+        }
+
+    res = st.session_state.get("ind_unc_results")
+    if res is None:
         st.info(
             "This check propagates measurement uncertainty in indicator values "
             "through the full PRISM pipeline. Set ±% uncertainty and click Run."
         )
         return
+    if res["sig"] != sig:
+        st.info("Inputs have changed since the last uncertainty run. "
+                "Click Run uncertainty propagation to update the results.")
+        return
+    st.caption(f"Results from the last run: ±{res['unc_pct']}% uncertainty, {res['n_iter']} "
+               f"iterations, p = {res['p_psi']:.2f}. Change the settings and click "
+               "Run uncertainty propagation to update.")
+    _render_indicator_uncertainty(res, names)
 
-    st.session_state["_dash_pending"] = {**st.session_state.get("_dash_pending", {}),
-                                         "dash_ind_unc_iter": int(n_iter),
-                                         "dash_ind_unc_pct": int(unc_pct)}
-    st.session_state.pop("validation_dashboard_results", None)
 
+def _compute_indicator_uncertainty(l3_cats, sel_wm, sel_mcdm, multi, p_psi,
+                                   unc_pct, n_iter, n_proc):
     rng      = np.random.default_rng(42)
     progress = st.progress(0, text="Running indicator uncertainty propagation...")
 
@@ -4764,6 +4807,15 @@ def validation_indicator_uncertainty():
             )
 
     progress.empty()
+    return {"unc_pct": unc_pct, "n_iter": n_iter, "p_psi": p_psi, "obs_psi": obs_psi,
+            "psi_boot": psi_boot, "rank_counts": rank_counts, "invalid_iters": invalid_iters}
+
+
+def _render_indicator_uncertainty(res, names):
+    n_proc = len(names)
+    unc_pct = res["unc_pct"]
+    obs_psi, psi_boot = res["obs_psi"], res["psi_boot"]
+    rank_counts, invalid_iters = res["rank_counts"], res["invalid_iters"]
 
     valid_iters = int(np.isfinite(psi_boot).all(axis=1).sum())
     if invalid_iters:
@@ -4799,7 +4851,7 @@ def validation_indicator_uncertainty():
         ci_stats.append((lo, hi, mn, obs))
         x_vals.extend([lo, hi, mn, obs])
     st.dataframe(pd.DataFrame(rows_ci),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
     if invariant_alts:
         st.caption(
             "Zero-width CI for "
@@ -4817,43 +4869,23 @@ def validation_indicator_uncertainty():
             row[f"Rank {r+1} (%)"] = round(rank_counts[pi, r] / valid_iters * 100, 1)
         rows_rp.append(row)
     st.dataframe(pd.DataFrame(rows_rp),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
 
     # ── PSI distribution chart ────────────────────────────────────────────────
     st.markdown("**PSI score distributions — 95% CI across iterations**")
-    apply_mpl_style()
-    shorts = proc_short_labels(names)
-    fig, ax = plt.subplots(
-        figsize=(max(6, n_proc * 2.0), max(3.5, n_proc * 1.1)),
+    lo_c, hi_c, mn_c, obs_c = (list(v) for v in zip(*ci_stats))
+    fig = _ci_chart(
+        names, lo_c, hi_c, obs_c, mn_c,
+        value_label="PSI score", ci_color="#0D2B5E", obs_color="#E85C1A",
+        obs_name="Observed PSI", obs_symbol="circle", mean_symbol="diamond",
+        horizontal=True, height=max(300, 150 + 60 * n_proc),
     )
-
-    for pi, (lo, hi, mn, obs) in enumerate(ci_stats):
-        ax.barh(
-            pi, hi - lo, left=lo, height=0.5,
-            color="#0D2B5E", alpha=0.3,
-            label="95% CI" if pi == 0 else "",
-        )
-        ax.scatter(
-            mn, pi, color="#0D2B5E", s=55, zorder=5,
-            marker="D", label="Bootstrap mean" if pi == 0 else "",
-        )
-        ax.scatter(
-            obs, pi, color="#E85C1A", s=55, zorder=6,
-            marker="o", label="Observed PSI" if pi == 0 else "",
-        )
-
     xmin = max(0.0, min(x_vals) - 0.05)
     xmax = min(1.05, max(x_vals) + 0.05)
     if xmax - xmin < 0.05:
         xmax = xmin + 0.05
-    ax.set_xlim(xmin, xmax)
-    ax.set_yticks(range(n_proc))
-    ax.set_yticklabels(shorts, fontsize=9)
-    ax.set_xlabel("PSI score", fontsize=10)
-    ax.legend(fontsize=8, frameon=False, loc="lower right")
-    ax.tick_params(labelsize=9)
-    plt.tight_layout()
-    mpl_show(fig)
+    fig.update_xaxes(range=[xmin, xmax])
+    st.plotly_chart(fig, width="stretch", key="ind_unc_psi_chart")
 
     # ── Summary message ───────────────────────────────────────────────────────
     top_pi  = int(np.argmax([rank_counts[p, 0] for p in range(n_proc)]))
@@ -5484,7 +5516,7 @@ def validation_intro():
         }
         for c in dashboard["checks"]
     ]
-    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
 
     st.markdown("##### Detailed verification views")
     with st.expander("1. Weighting-method sensitivity"):
@@ -5539,7 +5571,7 @@ def validation_weight_sensitivity():
 
     df = pd.DataFrame(rows)
     st.session_state["export_weight_sens"] = df
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
     rank_cols = [c for c in df.columns if c != "Alternative"]
     any_change = any(
         len(set(df.loc[i, rank_cols].tolist())) > 1
@@ -5658,7 +5690,7 @@ def validation_weight_sensitivity():
         font=dict(family="Times New Roman", color="#0D2B5E"),
         hoverlabel=dict(font_family="Times New Roman"),
     )
-    st.plotly_chart(fig_val_combo, use_container_width=True)
+    st.plotly_chart(fig_val_combo, width="stretch")
 
 
 def validation_power_spectrum():
@@ -5692,7 +5724,7 @@ def validation_power_spectrum():
         rank_rows.append(row)
     df_rank = pd.DataFrame(rank_rows)
     st.markdown("**Compromise rank across the power-mean spectrum**")
-    st.dataframe(df_rank, use_container_width=True, hide_index=True)
+    st.dataframe(df_rank, width="stretch", hide_index=True)
     st.session_state["export_power_spectrum"] = df_rank
 
     changed = [names[i] for i in range(len(names))
@@ -5754,7 +5786,7 @@ def validation_power_spectrum():
         ))
     _decorate(fig_r, "Compromise rank")
     fig_r.update_yaxes(autorange="reversed", dtick=1)
-    st.plotly_chart(fig_r, use_container_width=True)
+    st.plotly_chart(fig_r, width="stretch")
 
     # ---- weights ------------------------------------------------------------
     st.markdown("**How the category weights move across the spectrum**")
@@ -5766,7 +5798,7 @@ def validation_power_spectrum():
             hovertemplate="<b>" + cl + "</b><br>p: %{customdata}<br>Weight: %{y:.4f}<extra></extra>",
         ))
     _decorate(fig_w, "Category weight")
-    st.plotly_chart(fig_w, use_container_width=True)
+    st.plotly_chart(fig_w, width="stretch")
 
     w_rows = []
     for i, lab in enumerate(labels):
@@ -5775,7 +5807,7 @@ def validation_power_spectrum():
             row[cl] = round(float(res["weights"][i, j]), 4)
         w_rows.append(row)
     with st.expander("Weights table"):
-        st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(w_rows), width="stretch", hide_index=True)
 
 
 @with_gpm_picker("bc")
@@ -5816,7 +5848,7 @@ def validation_bc_sensitivity():
         base_rows.append(row)
 
     st.markdown("**Baseline results (Step 12, unperturbed)**")
-    st.dataframe(pd.DataFrame(base_rows, columns=cols), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(base_rows, columns=cols), width="stretch", hide_index=True)
 
     rng_bc = np.random.default_rng(42)
     cat_scores_pert = {}
@@ -5859,7 +5891,7 @@ def validation_bc_sensitivity():
     )
     df_bc_export = pd.DataFrame(p_rows, columns=p_cols)
     st.session_state["export_bc_sens"] = df_bc_export
-    st.dataframe(df_bc_export, use_container_width=True, hide_index=True)
+    st.dataframe(df_bc_export, width="stretch", hide_index=True)
 
     # ── Rank change summary ───────────────────────────────────────────────────
     base_df  = pd.DataFrame(base_rows, columns=cols)
@@ -5918,7 +5950,7 @@ def validation_bc_sensitivity():
             row[f"{CATS[ckey]['label']} (pert)"]   = round(pert, 4)
             row[f"{CATS[ckey]['label']} (Δ%)"]     = f"{pct_chg:+.1f}%"
         score_rows.append(row)
-    st.dataframe(pd.DataFrame(score_rows), use_container_width=True,
+    st.dataframe(pd.DataFrame(score_rows), width="stretch",
                  hide_index=True)
 
 
@@ -5956,7 +5988,7 @@ def validation_monte_carlo():
             [w_en, w_cr, w_ci], index=["Entropy", "CRITIC", "CILOS"],
             columns=[CATS[c]["label"] for c in l3_cats],
         ).round(4)
-        st.dataframe(wdf, use_container_width=True)
+        st.dataframe(wdf, width="stretch")
 
     run_mc = st.button("Run Monte Carlo simulation (10,000 iterations)", type="primary")
 
@@ -6013,13 +6045,13 @@ def validation_monte_carlo():
             st.markdown(f"**{METHOD_LABELS[m]}**")
             pct_table = (rank_counts[m] / n_iter * 100).round(1)
             df = pd.DataFrame(pct_table, index=names, columns=[f"Rank {r+1}" for r in range(n_proc)])
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
 
         if psi_rank_counts is not None:
             st.markdown(f"**PSI compromise rank (p={p_val:.2f})**")
             pct_table = (psi_rank_counts / n_iter * 100).round(1)
             df = pd.DataFrame(pct_table, index=names, columns=[f"Rank {r+1}" for r in range(n_proc)])
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
 
 
 
@@ -6116,7 +6148,7 @@ def analytics_category_weighted_contribution():
         rows_pct.append(row)
     df_pct = pd.DataFrame(rows_pct)
     st.session_state["export_cat_contrib"] = df_pct
-    st.dataframe(df_pct, use_container_width=True, hide_index=True)
+    st.dataframe(df_pct, width="stretch", hide_index=True)
 
 
 
@@ -6126,7 +6158,7 @@ def analytics_category_weighted_contribution():
                    "GPM weight": round(float(final_w[ci]), 4),
                    "Weight (%)": round(float(final_w[ci]) * 100, 1)}
                   for ci in range(len(l3_cats))]
-        st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(w_rows), width="stretch", hide_index=True)
 
 
 @with_gpm_picker("acomb")
@@ -6335,7 +6367,7 @@ def analytics_combined_contribution():
             row["Total (%)"] = 100.0
             rows_cat.append(row)
         st.dataframe(pd.DataFrame(rows_cat),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
         st.divider()
 
         # Indicator table per category
@@ -6368,14 +6400,14 @@ def analytics_combined_contribution():
                     row[f"{pname} full (%)"] = round(
                         float(psi_pct_this[j, pi]), 1)
                 rows_ind.append(row)
-            tot_row = {"Indicator": "Total", "MEREC weight": ""}
+            tot_row = {"Indicator": "Total", "MEREC weight": None}
             for pi, pname in enumerate(names):
                 tot_row[f"{pname} within-cat (%)"] = 100.0
                 tot_row[f"{pname} full (%)"] = round(
                     float(psi_pct_this[:, pi].sum()), 1)
             rows_ind.append(tot_row)
             st.dataframe(pd.DataFrame(rows_ind),
-                         use_container_width=True, hide_index=True)
+                         width="stretch", hide_index=True)
             st.write("")
 
 
@@ -6439,7 +6471,7 @@ def analytics_leave_one_out():
         matrix_rows.append(row)
 
     df_matrix = pd.DataFrame(matrix_rows)
-    st.dataframe(df_matrix, use_container_width=True, hide_index=True)
+    st.dataframe(df_matrix, width="stretch", hide_index=True)
 
     # ── Heatmap ───────────────────────────────────────────────────────────────
     z_vals = []
@@ -6465,7 +6497,7 @@ def analytics_leave_one_out():
             row[f"{name} (score)"] = round(float(scores[pi]), 4)
             row[f"{name} (rank)"] = int(ranks[pi])
         wc_rows.append(row)
-    st.dataframe(pd.DataFrame(wc_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(wc_rows), width="stretch", hide_index=True)
 
     # ── Interpretation ────────────────────────────────────────────────────────
     st.divider()
@@ -6590,7 +6622,7 @@ def analytics_indicator_loo():
             z_vals.append(row_z)
 
         st.dataframe(pd.DataFrame(matrix_rows),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
 
         # Heatmap per category
 
@@ -6712,7 +6744,7 @@ def analytics_stakeholder_preference():
 
     df_sh = pd.DataFrame(comp_rows)
     st.session_state["export_stakeholder"] = df_sh
-    st.dataframe(df_sh, use_container_width=True, hide_index=True)
+    st.dataframe(df_sh, width="stretch", hide_index=True)
 
     if any_change:
         st.warning(
@@ -6736,7 +6768,7 @@ def analytics_stakeholder_preference():
         method_rows.append(row)
 
     st.dataframe(pd.DataFrame(method_rows),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
 
     # ── Weight comparison chart ───────────────────────────────────────────────
     st.divider()
@@ -6796,7 +6828,7 @@ def analytics_stakeholder_preference():
             "Stakeholder PSI": round(float(psi_custom[pi]), 4),
             "Δ PSI": round(float(psi_custom[pi]) - float(base_psi[pi]), 4),
         })
-    st.dataframe(pd.DataFrame(psi_table_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(psi_table_rows), width="stretch", hide_index=True)
 
 
 
@@ -6867,11 +6899,11 @@ def step15():
     summary, strengths, weaknesses, profile = _build_decision_support_tables(winner_info)
 
     st.subheader("Overall recommendation")
-    st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(summary).astype({"Value": str}), width="stretch", hide_index=True)
 
     st.subheader("Strengths — why the winner wins")
     if strengths:
-        st.dataframe(pd.DataFrame(strengths), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(strengths), width="stretch", hide_index=True)
     else:
         st.info(
             "No clear strength signals yet. Run Step 13 verification, select multiple "
@@ -6880,7 +6912,7 @@ def step15():
 
     st.subheader("Weaknesses — where the winner fails")
     if weaknesses:
-        st.dataframe(pd.DataFrame(weaknesses), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(weaknesses), width="stretch", hide_index=True)
     else:
         st.info(
             "No material weaknesses detected. This may indicate a robust winner — "
@@ -6888,7 +6920,7 @@ def step15():
         )
 
     st.subheader("Category score profile")
-    st.dataframe(pd.DataFrame(profile), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(profile), width="stretch", hide_index=True)
 
     st.divider()
     st.subheader("Full assessment report")
